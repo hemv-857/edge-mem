@@ -1,0 +1,10 @@
+{
+  "name": "edge-engine",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Qdrant Edge intelligence engine — embedded vector memory, hybrid retrieval, policy + sync",
+  "scripts": {
+    "dev": "cd src && python3 main.py",
+    "start": "cd src && python3 main.py"
+  }
+}

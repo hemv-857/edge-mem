@@ -1,0 +1,80 @@
+# Edge Intelligence Platform — Worklog
+
+## Project: AI-Powered Edge Memory & Intelligence Platform (Qdrant Edge)
+
+---
+Task ID: 1
+Agent: main (orchestrator)
+Task: Build the Python Qdrant Edge engine mini-service (port 3030) — embedded vector memory, hybrid retrieval, policy engine, sync engine, conflict detection, activity log, seed data.
+
+Work Log:
+- Installed `qdrant-edge-py` 0.8.0 (real Qdrant Edge beta), `fastembed`, `fastapi`, `uvicorn` into `/home/z/.venv`.
+- Read the full `qdrant_edge` type stubs (`__init__.pyi`) to learn the API: `EdgeShard.create/load`, `EdgeConfig` (dense `EdgeVectorParams` + sparse `EdgeSparseVectorParams`), `Bm25` sparse embedder, `UpdateOperation.upsert_points`, `Point(id, vector={"":dense,"text":sparse}, payload)`, unified `query()` with `QueryRequest` + `Prefetch` + `Query.Nearest` + `Fusion.Rrf` for hybrid search, `snapshot_manifest()` for manifest-diff sync, `scroll/count/retrieve`.
+- Validated end-to-end: dense (FastEmbed bge-small-en, 384d) + sparse (BM25) vectors, all 3 search modes (dense/sparse/hybrid) via `query()` return correct semantic results. UUID string IDs (uuid5 of slug) work for stable cross-device identity.
+- Built `mini-services/edge-engine/` (package.json + src/embed.py + src/engine.py + src/seed.py + src/main.py).
+- Engine: 3 EdgeShards per device (manuals/incidents/sensors) + 3 cloud shards = 6 total. `device-alpha` is the live interactive device; `device-beta`/`device-gamma` are remote fleet members whose knowledge lives in the cloud (origin_device tag) — keeps memory within the 4GB cgroup limit.
+- Policy engine: tags every point on write with sensitivity/criticality/domain; routes to `local_only` / `queued` / `sync_now` via rule set.
+- Sync engine: dual-write push queue (critical jumps queue); manifest-diff pull (compares `snapshot_manifest()` hashes, transfers only newer points); conflict detection (divergent `updated_at`+`origin_device` → conflict card, never silent overwrite); bootstrap = full snapshot pull.
+- Seed: cloud pre-seeded with 7 manuals + 5 incidents (originating from beta/gamma). device-alpha starts empty → first demo step is bootstrapping.
+- Full golden path verified via HTTP: bootstrap(12) → offline write(critical→sync_now) → offline hybrid search(33-38ms) → sync(push 1) → manufactured conflict → resolve(merge) → fleet overview. Server stays alive.
+
+CRITICAL findings (binding quirks — documented for future agents):
+1. **uvloop crashes the binding.** Must run with the standard `asyncio` loop (or no event loop).
+2. **The binding is incompatible with FastAPI/uvicorn entirely** — even with `--loop asyncio` and async endpoints on the main event-loop thread, the process dies silently (SIGKILL, no traceback) after the first binding access corrupts the thread. A dedicated worker thread ALSO crashes (binding needs the main thread, but the main thread running an asyncio loop also fails).
+3. **`EdgeShard.optimize()` spawns background optimizer threads that crash a long-running server.** The standalone script survives because it exits before the background thread interferes; a long-running server idles in `select()` and the background optimizer touching shared binding state during that idle kills the process. FIX: `ShardStore.optimize()` is a no-op (just `flush()`). For edge-scale collections (hundreds of points) brute-force search is sub-40ms without HNSW — fine for the demo.
+4. **`scroll()` with `order_by` on a payload field needs a range index** that EdgeShard can't create at runtime → removed `order_by`, sort by `updated_at` in Python instead.
+5. **`retrieve()` requires `with_vector` positional arg** → pass `with_vector=False`.
+6. **Solution:** `main.py` uses a single-threaded `http.server.HTTPServer` (main thread, no asyncio, no threads). This matches the execution model under which the binding is stable. Sequential request handling is acceptable and safer for a single-user edge demo.
+
+Stage Summary:
+- Backend COMPLETE and STABLE. Service running on port 3030, single-threaded http.server.
+- API contract frozen (see endpoints in main.py ROUTES table): health, state, fleet, memory, points, search, write, connectivity, sync, bootstrap, sync-status, conflict/resolve, demo/conflict, activity, policy (GET/PUT), active.
+- Cloud seeded with 12 points. device-alpha empty (bootstrap on first use).
+- Ready for frontend development. Frontend must call `/api/edge/*?XTransformPort=3030` (relative path, port in query per gateway rules).
+- The dev script is `bun run dev` → `cd src && python3 main.py` (no uvicorn).
+
+---
+Task ID: 4-a
+Agent: full-stack-developer
+Task: Build MemoryExplorer, ActivityLog, PolicyEngine panels
+
+Work Log:
+- Read worklog.md (task 1 backend summary) + all contract files: use-edge.ts (EdgeHook), edge-ui.tsx (Panel/StatCard/badges/formatters), edge-types.ts (EdgePoint/MemoryShard/Policy/PolicyRule/ActivityEntry/WriteResult), edge-api.ts (edge client), TopBar.tsx (aesthetic reference), globals.css (edge-glow-*/edge-scroll/edge-pulse tokens, emerald/amber/rose palette).
+- Built MemoryExplorer.tsx: Panel header + 3 clickable shard cards (manuals/incidents/sensors) with mono name, SyncStateBadge, big point count, segments, formatBytes disk, embedding line, truncated manifest hash, emerald glow when selected. Selection stored in state; effective shard DERIVED in render (selectedShard = shardKeys.includes(selected) ? selected : shardKeys[0]) to avoid setState-in-effect. Two-column layout: left PointsList (fetches via edgeApi.points(shard, undefined, 20) in a useEffect keyed by [shard, edge.memory]; component remounts via key={shard} so loading=true is the initial state, no synchronous setState needed; each row shows slug/title/text snippet/origin_device/CriticalityBadge/SyncStateBadge/formatRelative). Right WriteForm: Textarea + criticality Select (low/medium/high/critical) + sensitivity Select (internal/restricted/public) + optional title/asset_id Inputs + offline note ("embeds locally via FastEmbed + BM25, zero network"). Write button calls edgeApi.write() directly (hook's write() returns void, so the API client is called to capture WriteResult.decision), then edge.refresh(). On success: toast + inline decision card (SyncStateBadge + reason + matched_rule + slug). Loading skeleton when edge.memory null.
+- Built ActivityLog.tsx: Panel header with live event count. Filter row of chip-buttons (all/write/search/sync/connectivity/conflict/policy/demo/seed/system) with per-kind counts; active chip emerald-accented. Timeline <ol> max-h-[560px] overflow-y-auto edge-scroll. Each row: left-rail colored dot (emerald=write/sync/seed, sky=search, amber=connectivity/queue/demo, rose=conflict, zinc=system/policy) + formatTime mono + colored kind badge + device mono + message + up to 2 meta chips (shard/slug/latency_ms/queue_depth/sync_state/mode/criticality/action, typed-safe via metaValue helper). animate-in fade-in slide-in-from-top-1 on each item keyed by ts+message. Empty state: "Awaiting activity…".
+- Built PolicyEngine.tsx: Panel header + explainer paragraph. Local policy state initialized from edge.state.policy via a ref-guarded effect (lastSeenSig tracks JSON signature; re-inits only when server policy actually changes, never clobbers in-progress edits). Rule table: one Card per rule with index/id/field/op/values|value mono chips + editable action Select (local_only/queued/sync_now, color-coded amber/rose) + reason. ttl_raw_sensor_seconds number Input. isDirty computed from JSON-sig diff. Save button → edgeApi.putPolicy(policy) → toast → edge.refresh(). Revert button when dirty. Routing legend: 3 colored cards (local_only/queued amber, sync_now rose) with descriptions, using SyncStateBadge. Version note "evaluated top-down, first match wins". Skeleton when policy null.
+- Fixed a blocking bug in src/lib/edge-api.ts: the qs() helper required a `params` argument but edgePut() (used by putPolicy) called it with zero args, which throws at runtime via Object.entries(undefined) and is a strict-TS arity error (TS2554). Applied a minimal, backward-compatible fix by giving qs() a default param `= {}`. This unblocks PolicyEngine's save and resolves the pre-existing tsc error; no contract change (existing callers qs(query || {}) behave identically). Documented here for orchestrator awareness.
+- Ran `bun run lint` (clean, 0 errors) and `bunx tsc --noEmit` — my 3 files have zero type errors; only remaining tsc errors are in src/app/page.tsx referencing sibling panels (FleetOverview/SearchPlayground/SyncConsole) that belong to other agents' tasks (4-b/4-c/4-d) and don't exist yet.
+
+Stage Summary:
+- 3 production-ready client components delivered: MemoryExplorer.tsx, ActivityLog.tsx, PolicyEngine.tsx — all in src/components/edge/, each default-exported with signature `({ edge }: { edge: EdgeHook })`.
+- Aesthetic matches TopBar.tsx: dark industrial theme, emerald/amber/rose/zinc accents (no indigo/blue; sky used sparingly for search/sensors), font-mono for IDs/timestamps/metrics, uppercase tracking-wider micro-labels, rounded-xl border bg-card/40 backdrop-blur panels, edge-glow/edge-scroll/edge-pulse tokens, responsive (stack on mobile, grid on sm/lg).
+- All shared helpers reused (Panel, CriticalityBadge, SyncStateBadge, formatBytes, formatRelative, formatTime). shadcn components used throughout (Button, Input, Textarea, Label, Select, Skeleton). Toast via @/hooks/use-toast. Edge API client imported as edgeApi for points()/write()/putPolicy().
+- Strict TypeScript clean (no `any`); react-hooks/set-state-in-effect rule satisfied (selection derived in render; fetch loading handled via key-remount + initial useState(true); policy re-init uses ref-guarded effect pattern).
+- One infra bugfix (edge-api.ts qs() default param) applied + documented. Ready for the other panel agents (4-b/4-c/4-d) to fill in FleetOverview/SearchPlayground/SyncConsole so page.tsx resolves.
+
+---
+Task ID: 2-7
+Agent: main (orchestrator)
+Task: Define API contract, build Next.js frontend (shell + 6 panels), wire cloud-LLM intelligence route, integrate, browser-verify golden path, create cron job.
+
+Work Log:
+- Froze the REST API contract (see mini-services/edge-engine/src/main.py ROUTES table): /api/edge/{health,state,fleet,memory,points,search,write,connectivity,sync,bootstrap,sync-status,conflict/resolve,demo/conflict,activity,policy,active}. Frontend calls via ?XTransformPort=3030 (relative path through Caddy gateway).
+- Built frontend foundation: src/lib/edge-types.ts (TS types mirroring backend), src/lib/edge-api.ts (typed client, XTransformPort=3030), src/hooks/use-edge.ts (polling hook: snapshot every 4.5s + incremental activity every 3.5s, action wrappers with busy state).
+- Custom industrial dark theme (globals.css): near-black slate base, emerald=online/synced, amber=offline/queued, rose=critical/conflict, NO indigo/blue. Custom utilities: edge-grid-bg, edge-glow-*, edge-pulse, edge-scroll, edge-scan.
+- Shared edge-ui.tsx: Panel, StatCard, CriticalityBadge, SyncStateBadge, LatencyBadge, StatusDot, formatBytes/Time/Relative.
+- TopBar.tsx: brand, active device, hero connectivity toggle (Switch, emerald/amber), queue mini, cloud pts, Bootstrap + Sync buttons.
+- page.tsx: sticky TopBar + live-KPI sub-strip + Tabs (Overview/Memory/Search/Sync/Activity/Policy) + sticky footer (min-h-screen flex flex-col, mt-auto).
+- Delegated 3 panels (MemoryExplorer, ActivityLog, PolicyEngine) to a full-stack-developer subagent (Task 4-a) — built + lint-clean; also fixed a qs() default-param bug in edge-api.ts.
+- Built 3 demo-critical panels myself: FleetOverview (device cards + cloud panel + contribution bars), SearchPlayground (query/shard/mode controls, example chips, scored results with score bars, OFFLINE badge), SyncConsole (queue, last-sync summary, manifest-diff, conflict cards with local/remote/merge resolution).
+- Cloud-LLM intelligence layer (Task 5): src/app/api/intelligence/route.ts (Next.js route, z-ai-web-dev-sdk, online-only). Actions: distill_sop (incident → reusable SOP) + auto_tag. Wired "Distill → SOP" button into SearchPlayground results (online only) → cloud LLM generates SOP → "Save to manuals shard" writes it locally → queues for fleet sync. This is the edge/cloud division of labor made visible.
+- Fixed lucide icon Robot→Bot (build error).
+- Fixed the critical keep-alive hogging bug: the single-threaded http.server with HTTP/1.1 keep-alive let Caddy's persistent connection monopolise the accept loop, making direct curls time out (looked like hangs). Switched to HTTP/1.0 + Connection: close → all clients served round-robin. Also raised listen backlog to 128, added manifest-hash + cloud-contrib caching in the engine to cut binding calls during polling, and reduced frontend polling to 4.5s/3.5s.
+- Browser-verified the full golden path via agent-browser through the gateway (http://localhost:81/): Overview renders live data (3 devices, 12 cloud pts) → Bootstrap pulls 12 (LOCAL PTS 0→12) → Memory Explorer shows shards+points → Search returns beta's verified fixes with RRF scores (1.0000, 0.6667) → toggle OFFLINE + search works (OFFLINE badge, "zero network calls") → Manufacture conflict + Sync surfaces conflict card (alpha 50Nm vs beta 45Nm) → Merge resolution clears it → Cloud-LLM "Distill → SOP" generates a clean 8-step SOP from the P-202 incident → Save to manuals (7→8 pts, queued for fleet sync). No console/runtime errors throughout.
+- Final: lint clean, both services up (edge-engine :3030, next :3000), app served via gateway :81.
+
+Stage Summary:
+- COMPLETE, browser-verified edge-to-cloud AI workflow. Every brief requirement met: local semantic memory (EdgeShard), offline hybrid retrieval (FastEmbed+BM25+RRF), policy-driven local-vs-sync routing, intermittent-connectivity survival (dual-write queue + manifest-diff pull), conflict detection + resolution, fleet dashboard, and a meaningful edge↔cloud LLM workflow (offline retrieval → online LLM SOP synthesis → fleet sync).
+- Cron webDevReview job created (job_id 406908, every 15 min) to continue QA + feature work autonomously.
+- Known limitation (documented): the qdrant_edge Rust binding is incompatible with asyncio/uvicorn/uvloop and with background threads — requires a single-threaded plain http.server on the main thread; and EdgeShard.optimize() must be disabled (spawns background threads that crash a long-running process). All worked around stably.
+

@@ -1,0 +1,198 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { Activity, Radio, Inbox } from "lucide-react";
+import type { EdgeHook } from "@/hooks/use-edge";
+import type { ActivityEntry } from "@/lib/edge-types";
+import { cn } from "@/lib/utils";
+import { Panel, formatTime } from "./edge-ui";
+
+type KindFilter =
+  | "all" | "write" | "search" | "sync" | "connectivity"
+  | "conflict" | "policy" | "demo" | "seed" | "system";
+
+const KIND_FILTERS: KindFilter[] = [
+  "all", "write", "search", "sync", "connectivity",
+  "conflict", "policy", "demo", "seed", "system",
+];
+
+/** dot + badge color per kind — emerald=sync/write, amber=connectivity/queue,
+ *  rose=conflict, zinc=system/policy. sky used sparingly for search. */
+const KIND_STYLE: Record<string, { dot: string; badge: string; label: string }> = {
+  write:        { dot: "bg-emerald-400", badge: "text-emerald-300 border-emerald-500/30 bg-emerald-500/10", label: "WRITE" },
+  sync:         { dot: "bg-emerald-400", badge: "text-emerald-300 border-emerald-500/30 bg-emerald-500/10", label: "SYNC" },
+  seed:         { dot: "bg-emerald-400", badge: "text-emerald-300 border-emerald-500/30 bg-emerald-500/10", label: "SEED" },
+  search:       { dot: "bg-sky-400",     badge: "text-sky-300 border-sky-500/30 bg-sky-500/10",             label: "SEARCH" },
+  connectivity: { dot: "bg-amber-400",   badge: "text-amber-300 border-amber-500/30 bg-amber-500/10",       label: "CONNECT" },
+  queue:        { dot: "bg-amber-400",   badge: "text-amber-300 border-amber-500/30 bg-amber-500/10",       label: "QUEUE" },
+  demo:         { dot: "bg-amber-400",   badge: "text-amber-300 border-amber-500/30 bg-amber-500/10",       label: "DEMO" },
+  conflict:     { dot: "bg-rose-400",    badge: "text-rose-300 border-rose-500/30 bg-rose-500/10",          label: "CONFLICT" },
+  policy:       { dot: "bg-zinc-400",    badge: "text-zinc-300 border-zinc-500/30 bg-zinc-500/10",          label: "POLICY" },
+  system:       { dot: "bg-zinc-400",    badge: "text-zinc-300 border-zinc-500/30 bg-zinc-500/10",          label: "SYSTEM" },
+};
+
+const DEFAULT_STYLE = KIND_STYLE.system;
+
+function styleFor(kind: string) {
+  return KIND_STYLE[kind] ?? DEFAULT_STYLE;
+}
+
+/** meta fields we surface as mono chips (in priority order). */
+const META_KEYS = ["shard", "slug", "latency_ms", "queue_depth", "sync_state", "mode", "criticality", "action"] as const;
+
+function metaValue(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "string") return v;
+  if (typeof v === "number") return Number.isFinite(v) ? String(v) : null;
+  if (typeof v === "boolean") return v ? "true" : "false";
+  return null;
+}
+
+export default function ActivityLog({ edge }: { edge: EdgeHook }) {
+  const [filter, setFilter] = useState<KindFilter>("all");
+  const activity = edge.activity;
+
+  const visible = useMemo(() => {
+    if (filter === "all") return activity;
+    return activity.filter((e) => e.kind === filter);
+  }, [activity, filter]);
+
+  // counts per kind for chip badges
+  const counts = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const e of activity) m[e.kind] = (m[e.kind] ?? 0) + 1;
+    return m;
+  }, [activity]);
+
+  return (
+    <Panel
+      title="Activity Log"
+      desc="Append-only edge event stream — writes, connectivity, policy decisions, sync, conflicts"
+      right={
+        <div className="flex items-center gap-2 rounded-md border border-border bg-card/50 px-2.5 py-1">
+          <Radio className={cn(
+            "h-3.5 w-3.5",
+            edge.loading ? "text-amber-400 edge-pulse" : "text-emerald-400",
+          )} />
+          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            {activity.length} events
+          </span>
+        </div>
+      }
+    >
+      {/* filter row */}
+      <div className="mb-4 flex flex-wrap items-center gap-1.5">
+        {KIND_FILTERS.map((k) => {
+          const active = filter === k;
+          const count = k === "all" ? activity.length : counts[k] ?? 0;
+          return (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setFilter(k)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider transition-colors",
+                active
+                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                  : "border-border bg-card/40 text-muted-foreground hover:border-border/80 hover:text-foreground",
+              )}
+            >
+              {k}
+              {k !== "all" && count > 0 && (
+                <span className={cn(
+                  "rounded-full px-1.5 text-[9px] tabular-nums",
+                  active ? "bg-emerald-500/20 text-emerald-200" : "bg-muted text-muted-foreground",
+                )}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* timeline */}
+      {visible.length === 0 ? (
+        <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+          <Inbox className="h-6 w-6 text-muted-foreground/40" />
+          <p className="font-mono text-xs text-muted-foreground">Awaiting activity…</p>
+          <p className="text-[10px] text-muted-foreground/70">
+            events from device-alpha will stream here in real time
+          </p>
+        </div>
+      ) : (
+        <ol className="max-h-[560px] space-y-1.5 overflow-y-auto edge-scroll pr-1">
+          {visible.map((entry) => (
+            <ActivityRow key={`${entry.ts}-${entry.message}`} entry={entry} />
+          ))}
+        </ol>
+      )}
+    </Panel>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* row                                                                         */
+/* -------------------------------------------------------------------------- */
+
+function ActivityRow({ entry }: { entry: ActivityEntry }) {
+  const s = styleFor(entry.kind);
+
+  // pick up to 2 most relevant meta chips
+  const metaChips: { k: string; v: string }[] = [];
+  for (const k of META_KEYS) {
+    const v = metaValue(entry.meta[k]);
+    if (v !== null && v !== "") {
+      metaChips.push({ k, v });
+      if (metaChips.length >= 2) break;
+    }
+  }
+
+  return (
+    <li className="animate-in fade-in slide-in-from-top-1 flex items-start gap-3 rounded-lg border border-transparent px-2.5 py-2 transition-colors hover:border-border/60 hover:bg-card/40">
+      {/* left rail dot */}
+      <div className="mt-1.5 flex flex-col items-center">
+        <span className={cn("h-2 w-2 rounded-full", s.dot)} />
+        <span className="mt-1 h-full w-px bg-border/40" />
+      </div>
+
+      {/* body */}
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+            {formatTime(entry.ts)}
+          </span>
+          <span
+            className={cn(
+              "rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider",
+              s.badge,
+            )}
+          >
+            {s.label}
+          </span>
+          {entry.device && (
+            <span className="font-mono text-[10px] text-muted-foreground/70">
+              {entry.device}
+            </span>
+          )}
+        </div>
+        <p className="mt-0.5 text-xs leading-relaxed text-foreground/90">
+          {entry.message}
+        </p>
+        {metaChips.length > 0 && (
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            {metaChips.map((c) => (
+              <span
+                key={c.k}
+                className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+              >
+                <span className="text-muted-foreground/60">{c.k}:</span>{" "}
+                <span className="text-foreground/80">{c.v}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </li>
+  );
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Cpu, LayoutDashboard, Database, Search, RefreshCw, Activity, Shield, Cloud, HardDrive, Zap, LineChart } from "lucide-react";
 import { useEdge } from "@/hooks/use-edge";
@@ -14,11 +14,25 @@ import ActivityLog from "@/components/edge/ActivityLog";
 import PolicyEngine from "@/components/edge/PolicyEngine";
 import PointDetailDrawer from "@/components/edge/PointDetailDrawer";
 import MetricsPanel from "@/components/edge/MetricsPanel";
+import CommandPalette from "@/components/edge/CommandPalette";
 import { formatBytes, formatRelative } from "@/components/edge/edge-ui";
 
 export default function Home() {
   const edge = useEdge();
   const [tab, setTab] = useState("overview");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // ⌘K / Ctrl+K to open the command palette
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
 
   const totalPoints = edge.memory?.total_points ?? 0;
   const queueDepth = edge.syncStatus?.queue_depth ?? 0;
@@ -31,7 +45,7 @@ export default function Home() {
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
-      <TopBar edge={edge} />
+      <TopBar edge={edge} onOpenPalette={() => setPaletteOpen(true)} />
 
       {/* Sub-strip: live KPIs */}
       <div className="border-b border-border/60 bg-card/20">
@@ -94,6 +108,9 @@ export default function Home() {
 
       {/* Point detail drawer — shared across all panels via edge.openPoint() */}
       <PointDetailDrawer point={edge.activePoint} onClose={edge.closePoint} edge={edge} />
+
+      {/* Command palette — ⌘K / Ctrl+K */}
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} edge={edge} onNavigate={(t) => setTab(t)} />
     </div>
   );
 }

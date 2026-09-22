@@ -54,6 +54,9 @@ export default function FleetOverview({ edge }: { edge: EdgeHook }) {
         <StatCard label="Open conflicts" value={data.devices.reduce((a, d) => a + d.open_conflicts, 0)} sub="awaiting resolution" accent={(data.devices.reduce((a, d) => a + d.open_conflicts, 0)) > 0 ? "rose" : "default"} icon={<TrendingUp className="h-4 w-4" />} />
       </div>
 
+      {/* Fleet Learning hero — edge↔cloud knowledge flow visual */}
+      <FleetLearningHero edge={edge} />
+
       {/* demo walkthrough */}
       <DemoWalkthrough edge={edge} />
 
@@ -269,6 +272,108 @@ function MiniActivityFeed({ activity }: { activity: ActivityEntry[] }) {
         </ol>
       )}
     </Panel>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* fleet learning hero — edge↔cloud knowledge flow visual                      */
+/* -------------------------------------------------------------------------- */
+
+function FleetLearningHero({ edge }: { edge: EdgeHook }) {
+  const ss = edge.syncStatus;
+  const online = ss?.online ?? true;
+  const queueDepth = ss?.queue_depth ?? 0;
+  const totalPoints = edge.memory?.total_points ?? 0;
+  const cloudPoints = edge.state?.cloud.total_points ?? 0;
+  const pushedBytes = ss?.bytes_pushed ?? 0;
+  const pulledBytes = ss?.bytes_pulled ?? 0;
+
+  return (
+    <div className="relative overflow-hidden rounded-xl border border-border bg-gradient-to-br from-card/60 via-card/40 to-background/40 p-5">
+      {/* subtle grid bg */}
+      <div className="absolute inset-0 edge-grid-bg opacity-30" />
+      <div className="relative">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-emerald-400" />
+            <h3 className="font-mono text-sm font-semibold text-foreground">Fleet Learning</h3>
+            <span className="font-mono text-[10px] text-muted-foreground">— knowledge flows edge ↔ cloud</span>
+          </div>
+          <span className={cn(
+            "flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider",
+            online ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+          )}>
+            <span className={cn("h-1.5 w-1.5 rounded-full", online ? "bg-emerald-400 edge-pulse" : "bg-amber-400")} />
+            {online ? "syncing" : "offline"}
+          </span>
+        </div>
+
+        {/* flow diagram: EDGE ↔ CLOUD */}
+        <div className="flex items-center gap-3">
+          {/* EDGE side */}
+          <div className="flex-1 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.04] p-3">
+            <div className="flex items-center gap-2">
+              <Cpu className="h-4 w-4 text-emerald-400" />
+              <span className="font-mono text-xs font-semibold text-foreground">EDGE</span>
+              <span className="font-mono text-[9px] text-muted-foreground">device-alpha</span>
+            </div>
+            <div className="mt-2 space-y-1">
+              <FlowRow label="local memory" value={`${totalPoints} pts`} accent="emerald" />
+              <FlowRow label="push queue" value={`${queueDepth} pending`} accent={queueDepth > 0 ? "amber" : undefined} />
+              <FlowRow label="pushed" value={formatBytes(pushedBytes)} accent={pushedBytes > 0 ? "emerald" : undefined} />
+            </div>
+          </div>
+
+          {/* flow arrows */}
+          <div className="flex flex-col items-center gap-1.5 px-1">
+            <FlowArrow direction="up" active={online && queueDepth > 0} label="push" />
+            <div className="h-px w-12 bg-border" />
+            <FlowArrow direction="down" active={online} label="pull" />
+          </div>
+
+          {/* CLOUD side */}
+          <div className="flex-1 rounded-lg border border-sky-500/20 bg-sky-500/[0.04] p-3">
+            <div className="flex items-center gap-2">
+              <Cloud className="h-4 w-4 text-sky-300" />
+              <span className="font-mono text-xs font-semibold text-foreground">CLOUD</span>
+              <span className="font-mono text-[9px] text-muted-foreground">Qdrant Server</span>
+            </div>
+            <div className="mt-2 space-y-1">
+              <FlowRow label="shared knowledge" value={`${cloudPoints} pts`} accent="sky" />
+              <FlowRow label="manifest-diff" value="enabled" />
+              <FlowRow label="pulled" value={formatBytes(pulledBytes)} accent={pulledBytes > 0 ? "sky" : undefined} />
+            </div>
+          </div>
+        </div>
+
+        {/* insight bar */}
+        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/60 pt-3 font-mono text-[10px] text-muted-foreground">
+          <span className="flex items-center gap-1"><ArrowRightLeft className="h-3 w-3 text-emerald-400" /> dual-write queue + manifest-diff pull</span>
+          <span className="flex items-center gap-1"><Database className="h-3 w-3 text-sky-300" /> FastEmbed bge-small-en (384d) + BM25</span>
+          <span className="flex items-center gap-1"><ActivityIcon className="h-3 w-3 text-amber-300" /> offline-first · syncs when connected</span>
+          <span className="ml-auto">a fix verified on one device flows to the whole fleet</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FlowRow({ label, value, accent }: { label: string; value: React.ReactNode; accent?: "emerald" | "amber" | "sky" }) {
+  const color = accent === "emerald" ? "text-emerald-400" : accent === "amber" ? "text-amber-400" : accent === "sky" ? "text-sky-300" : "text-foreground";
+  return (
+    <div className="flex items-center justify-between font-mono text-[10px]">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={cn("tabular-nums", color)}>{value}</span>
+    </div>
+  );
+}
+
+function FlowArrow({ direction, active, label }: { direction: "up" | "down"; active: boolean; label: string }) {
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      <ArrowRightLeft className={cn("h-4 w-4 rotate-90", active ? "text-emerald-400 edge-pulse" : "text-muted-foreground/40")} style={{ transform: direction === "up" ? "rotate(-90deg)" : "rotate(90deg)" }} />
+      <span className={cn("font-mono text-[9px] uppercase", active ? "text-emerald-400" : "text-muted-foreground/50")}>{label}</span>
+    </div>
   );
 }
 

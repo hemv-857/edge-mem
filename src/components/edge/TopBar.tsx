@@ -3,11 +3,11 @@
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import { Cpu, Cloud, RefreshCw, Zap, DownloadCloud, Wifi, WifiOff } from "lucide-react";
+import { Cpu, Cloud, RefreshCw, Zap, DownloadCloud, Wifi, WifiOff, Command } from "lucide-react";
 import type { EdgeHook } from "@/hooks/use-edge";
 import { StatusDot, formatRelative } from "./edge-ui";
 
-export default function TopBar({ edge }: { edge: EdgeHook }) {
+export default function TopBar({ edge, onOpenPalette }: { edge: EdgeHook; onOpenPalette?: () => void }) {
   const { state, syncStatus, busy } = edge;
   const online = syncStatus?.online ?? true;
   const active = state?.devices.find((d) => d.id === state.active_device);
@@ -66,6 +66,18 @@ export default function TopBar({ edge }: { edge: EdgeHook }) {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          {/* ⌘K command palette trigger */}
+          {onOpenPalette && (
+            <button
+              onClick={onOpenPalette}
+              title="Command palette (⌘K)"
+              className="flex items-center gap-1.5 rounded-lg border border-border bg-card/50 px-2.5 py-1.5 font-mono text-[10px] text-muted-foreground transition-colors hover:border-emerald-500/30 hover:text-foreground"
+            >
+              <Command className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Search</span>
+              <kbd className="hidden rounded border border-border bg-muted px-1 py-0.5 text-[8px] sm:inline">⌘K</kbd>
+            </button>
+          )}
           {/* queue mini */}
           <div className="hidden items-center gap-2 rounded-lg border border-border bg-card/50 px-3 py-1.5 sm:flex">
             <Zap className={cn("h-3.5 w-3.5", queueCritical > 0 ? "text-rose-400" : queueDepth > 0 ? "text-amber-400" : "text-muted-foreground")} />

@@ -236,3 +236,29 @@ Stage Summary:
 - 2 features (char counter + templates, mobile responsive polish) + write button visual weight improvement.
 - The Memory write form now guides users with realistic templates + live char feedback, and the mobile experience is clean across all tabs.
 - No unresolved issues; project remains stable and lint-clean across 7 tabs. The app is demo-ready with guided walkthrough, auto-sync, searchable/exportable activity log, policy simulation, mode comparison, system health, and now template-assisted writes.
+
+---
+Task ID: cron-review-6
+Agent: main (cron webDevReview round 6)
+Task: QA via VLM (topbar + overview), add Command Palette (⌘K) + Fleet Learning hero visual.
+
+Work Log:
+- Reviewed worklog.md — project had 7 tabs, feature-complete after cron-review-5 (char counter + templates, mobile responsive polish). Cloud at 13 points, edge-engine uptime 1363s.
+- Fresh QA: opened app via gateway, screenshotted topbar + bootstrapped overview, ran VLM (z-ai vision) on both. VLM flagged: no command palette (⌘K) for a "console" app, no hero/summary element on overview, topbar density/cramping.
+
+NEW FEATURES (browser-verified + VLM-verified):
+1. Command Palette (⌘K / Ctrl+K) — new CommandPalette.tsx component wired into page.tsx. Triggered by Cmd/Ctrl+K (global keydown listener) OR by a new "⌘K Search" button added to the TopBar. Opens a centered modal with: a search input (auto-focused), grouped commands (Navigate: 7 tabs; Actions: Bootstrap, Sync now, Go offline/online, Flush queue (when queue>0), Manufacture conflict), keyboard navigation (↑↓ to move, ↵ to select, esc to close), live status footer (online/offline + queued count). Commands filter by label/hint/keywords. Verified: Ctrl+K opens palette → type "sync" → shows sync-related commands. VLM-verified.
+2. Fleet Learning hero (FleetOverview.tsx) — a new visual diagram between the top stats and the Demo Walkthrough on the Overview tab. Shows the edge↔cloud knowledge flow: EDGE side (emerald card: local memory pts, push queue pending, pushed bytes), animated flow arrows (push↑ active when online+queue>0, pull↓ active when online), CLOUD side (sky card: shared knowledge pts, manifest-diff enabled, pulled bytes), and an insight bar (dual-write queue + manifest-diff pull, FastEmbed+BM25, offline-first, "a fix verified on one device flows to the whole fleet"). Subtle grid background + gradient. VLM-verified: "EDGE and CLOUD sides clearly visible, flow arrows distinct, color coding consistent, insight bar provides clear context".
+
+BUG FIXES:
+- Lint: fixed 2 react-hooks/set-state-in-effect errors in CommandPalette — replaced synchronous setState-in-effect with requestAnimationFrame (for open→reset) and a derived `safeActiveIdx` clamp (for query-change reset, no effect needed).
+
+VERIFICATION (agent-browser through gateway):
+- TopBar shows new "⌘K Search" button. Ctrl+K opens the palette → search input focused → type "sync" → filtered results visible. Esc closes. VLM-verified.
+- Overview → Fleet Learning hero renders between stats + walkthrough → shows EDGE (12pts, 0 queued, pushed bytes) ↔ CLOUD (13pts, manifest-diff, pulled bytes) with animated flow arrows + insight bar. VLM-verified.
+- Lint clean (eslint . → 0 errors). Both services stable (edge-engine :3030, next :3000 HTTP 200, cloud=13).
+
+Stage Summary:
+- 2 new features (Command Palette ⌘K, Fleet Learning hero visual) added.
+- The app now has a polished "console" feel with a keyboard-driven command palette, and the Overview leads with a striking edge↔cloud knowledge-flow diagram that makes the core value proposition visible at a glance.
+- No unresolved issues; project remains stable and lint-clean across 7 tabs. The app is demo-ready with: command palette, fleet learning hero, guided walkthrough, auto-sync, searchable/exportable activity log, policy simulation, mode comparison, system health, similar-points, point drawer, template-assisted writes, and full mobile responsiveness.

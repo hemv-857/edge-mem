@@ -10,6 +10,25 @@ import type {
 const SNAP_INTERVAL = 4500;   // state + syncStatus + memory + fleet
 const ACT_INTERVAL = 3500;    // incremental activity
 
+export interface PointRef {
+  id: string;
+  shard: string;
+  slug?: string;
+  text?: string;
+  title?: string;
+  domain?: string;
+  criticality?: string;
+  sensitivity?: string;
+  origin_device?: string;
+  sync_state?: string;
+  updated_at?: number;
+  asset_id?: string;
+  sensor_type?: string;
+  value?: number;
+  unit?: string;
+  severity?: string;
+}
+
 export interface EdgeHook {
   state: EdgeState | null;
   syncStatus: SyncStatus | null;
@@ -18,6 +37,10 @@ export interface EdgeHook {
   activity: ActivityEntry[];
   loading: boolean;
   error: string | null;
+  // point detail drawer
+  activePoint: PointRef | null;
+  openPoint: (p: PointRef) => void;
+  closePoint: () => void;
   // actions
   bootstrap: () => Promise<void>;
   sync: () => Promise<void>;
@@ -115,6 +138,10 @@ export function useEdge(): EdgeHook {
     }
   }, [refreshSnapshot, refreshActivity]);
 
+  const [activePoint, setActivePoint] = useState<PointRef | null>(null);
+  const openPoint = useCallback((p: PointRef) => setActivePoint(p), []);
+  const closePoint = useCallback(() => setActivePoint(null), []);
+
   const bootstrap = useCallback(() => run("bootstrap", () => edge.bootstrap(activeRef.current).then(() => undefined)), [run]);
   const sync = useCallback(() => run("sync", () => edge.sync(activeRef.current).then(() => undefined)), [run]);
   const setOnline = useCallback((online: boolean) => run("connectivity", () => edge.connectivity(activeRef.current, online).then(() => undefined)), [run]);
@@ -132,6 +159,7 @@ export function useEdge(): EdgeHook {
 
   return {
     state, syncStatus, memory, fleet, activity, loading, error,
+    activePoint, openPoint, closePoint,
     bootstrap, sync, toggleConnectivity, setOnline, write, search,
     resolveConflict, demoConflict, refresh, busy,
   };

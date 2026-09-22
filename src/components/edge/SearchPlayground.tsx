@@ -111,31 +111,31 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
           </div>
         }
       >
-        {/* query row */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        {/* query row — textarea + search button aligned to same height */}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
           <div className="flex-1">
             <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Query</Label>
             <Textarea
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="e.g. seen this vibration pattern before?"
-              className="mt-1 min-h-[44px] resize-none border-border bg-card/40 font-mono text-sm"
+              className="mt-1 min-h-[42px] resize-none border-border bg-card/40 font-mono text-sm leading-tight"
               onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) run(); }}
             />
           </div>
           <Button
             onClick={() => run()}
             disabled={running || !!edge.busy}
-            className="gap-2 bg-emerald-500/90 text-emerald-950 hover:bg-emerald-400 sm:w-auto"
+            className="mt-[18px] h-[42px] gap-2 bg-emerald-500/90 text-emerald-950 hover:bg-emerald-400 sm:w-28"
           >
             <Search className={cn("h-4 w-4", running && "animate-pulse")} />
-            {running ? "Searching…" : "Search"}
+            {running ? "…" : "Search"}
           </Button>
         </div>
 
-        {/* controls */}
-        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div>
+        {/* controls — Shard / Mode / Limit in a unified flex row */}
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-12">
+          <div className="sm:col-span-5">
             <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Shard</Label>
             <div className="mt-1 flex gap-1">
               {SHARDS.map((s) => (
@@ -150,7 +150,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
               ))}
             </div>
           </div>
-          <div>
+          <div className="sm:col-span-4">
             <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Mode</Label>
             <div className="mt-1 flex gap-1">
               {MODES.map((m) => (
@@ -166,7 +166,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
               ))}
             </div>
           </div>
-          <div>
+          <div className="sm:col-span-3">
             <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Limit: {limit}</Label>
             <input
               type="range" min={1} max={10} value={limit}
@@ -221,7 +221,11 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
                 const maxScore = res.results[0]?.score ?? 1;
                 const pct = Math.max(4, Math.round((r.score / (maxScore || 1)) * 100));
                 return (
-                  <div key={r.id} className="rounded-lg border border-border bg-card/40 p-3.5">
+                  <div
+                    key={r.id}
+                    onClick={() => edge.openPoint({ id: r.id, shard: res.shard, ...r })}
+                    className="group cursor-pointer rounded-lg border border-border bg-card/40 p-3.5 transition-colors hover:border-emerald-500/30 hover:bg-card/60"
+                  >
                     <div className="flex items-start gap-3">
                       <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border bg-muted font-mono text-[10px] text-muted-foreground">{i + 1}</div>
                       <div className="min-w-0 flex-1">
@@ -244,7 +248,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
                           </div>
                           {r.updated_at && <span className="font-mono text-[10px] text-muted-foreground">{formatRelative(r.updated_at)}</span>}
                           <button
-                            onClick={() => distill(r.id, r.text, r.asset_id)}
+                            onClick={(e) => { e.stopPropagation(); distill(r.id, r.text, r.asset_id); }}
                             disabled={!online || distillId === r.id}
                             title={online ? "Distill this incident into an SOP via the cloud LLM" : "Cloud LLM requires connectivity"}
                             className={cn(
@@ -265,7 +269,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
                             <div className="mt-2 flex items-center gap-1.5">
                               <Button
                                 size="sm"
-                                onClick={() => saveSop(r.id, distilled[r.id].sop, r.asset_id)}
+                                onClick={(e) => { e.stopPropagation(); saveSop(r.id, distilled[r.id].sop, r.asset_id); }}
                                 disabled={distilled[r.id].saving || !!edge.busy}
                                 className="gap-1 bg-emerald-500/90 font-mono text-[10px] text-emerald-950 hover:bg-emerald-400"
                               >

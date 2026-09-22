@@ -78,3 +78,43 @@ Stage Summary:
 - Cron webDevReview job created (job_id 406908, every 15 min) to continue QA + feature work autonomously.
 - Known limitation (documented): the qdrant_edge Rust binding is incompatible with asyncio/uvicorn/uvloop and with background threads — requires a single-threaded plain http.server on the main thread; and EdgeShard.optimize() must be disabled (spawns background threads that crash a long-running process). All worked around stably.
 
+
+---
+Task ID: cron-review-1
+Agent: main (cron webDevReview round 1)
+Task: QA pass via agent-browser + VLM, fix bugs, add new features, improve styling.
+
+Work Log:
+- Reviewed worklog.md — project was complete and browser-verified from the prior session.
+- Performed QA via agent-browser: opened the app through the gateway (http://localhost:81/), screenshotted all 6 tabs, ran the VLM skill (z-ai vision CLI) on the Overview, Search, and Sync screenshots to get concrete UI/UX feedback.
+- VLM-identified issues (verified against the code): (1) FleetOverview — 0-contribution bar got a tiny bar instead of an empty state; device-gamma (remote) showed an empty data block where live-only fields would be; cloud shards lacked icons; large empty space below the cloud panel. (2) SearchPlayground — search button taller than the query textarea; controls row underutilized width; excessive vertical padding. (3) SyncConsole — "critical: 0" shown in red even when zero; manifest diffs lacked relative-time context.
+
+BUG FIXES (all browser-verified):
+- FleetOverview.tsx rewrite: 0-contribution bars now show a dashed "no contributions yet" empty state; remote device cards show a dedicated remote layout (location/technician/kind/cloud-contrib/last-sync/status + a "knowledge hosted in cloud" info bar) instead of empty live-only fields; cloud shards now have colored icons (BookOpen/AlertTriangle/Gauge) with per-shard accent rings; live device cards now also show a "pushed" bytes meta; filled the empty space below the cloud panel with a new MiniActivityFeed (top 8 recent fleet events with colored dots).
+- SearchPlayground.tsx: aligned the search button height to the textarea (both 42px, button uses mt-[18px] to clear the label); tightened vertical padding (mt-4→mt-3); restructured the Shard/Mode/Limit controls into a 12-col grid (5/4/3) for better width utilization.
+- SyncConsole.tsx: muted "critical: 0" to muted-foreground when zero (was always rose-400); added "checked Xm ago" relative time to the manifest-diff header; colored changed manifest rows with emerald accent; clarified unchanged rows with "v{hash}" instead of "—→hash".
+
+NEW FEATURES (all browser-verified):
+1. Point Detail Drawer (PointDetailDrawer.tsx): a reusable slide-over drawer opened by clicking any point in MemoryExplorer or SearchPlayground. Fetches the full payload via a new GET /api/edge/point endpoint (added to engine.py + main.py). Shows badges (criticality/sync_state/severity), a metadata grid (id/origin/asset/sensor/value/sensitivity/time), the full text content, a "Distill → SOP" cloud-LLM action for incident-domain points (online only), any extra payload keys, and a Delete button (new POST /api/edge/point/delete endpoint). Closes on backdrop click or Escape. Wired into page.tsx via a shared `edge.openPoint()`/`edge.closePoint()`/`edge.activePoint` state added to the useEdge hook so any panel can trigger it. Search result cards and memory list items are now clickable with hover-emerald borders; inner buttons use stopPropagation to avoid triggering the card click.
+2. Sync History Timeline (in SyncConsole.tsx): a new full-width panel below the sync/conflicts grid. Filters the activity log to sync/bootstrap/connectivity/conflict/queue events, renders them as a vertical timeline with colored nodes (emerald=sync, sky=bootstrap, amber=connectivity, rose=conflict), kind badges, timestamps + relative times, and metric chips (pushed↑/pulled↓/conflicts/queued) when available. Empty state prompts the user to run a sync.
+3. Auto-tag on Write form (in MemoryExplorer.tsx): a new "auto-tag" button in the WriteForm header that calls the existing /api/intelligence route with action "auto_tag" to classify the note's criticality + sensitivity via the cloud LLM (online only). On success, auto-fills the criticality/sensitivity selects and shows a "cloud LLM: <reason>" inline note. Disabled when offline or when text is empty.
+4. Overview mini activity feed (in FleetOverview.tsx): fills the previously-empty space below the cloud panel with a compact recent-activity stream (top 8 events with colored dots), making the right column feel complete.
+
+BACKEND additions:
+- engine.py: ShardStore.delete_point() method; Fleet.get_point() + Fleet.delete_point() methods; contrib-cache invalidation on sync/resolve/demo.
+- main.py: new routes GET /api/edge/point (fetch full payload) + POST /api/edge/point/delete (delete a point); EdgeHTTPServer subclass with request_queue_size=128 + allow_reuse_address (already present from prior round).
+- edge-api.ts: added getPoint() + deletePoint() client methods.
+- use-edge.ts: added PointRef type + activePoint/openPoint/closePoint to the hook.
+
+VERIFICATION (agent-browser through gateway http://localhost:81/):
+- App loads cleanly, no console/runtime errors.
+- Bootstrap → Memory tab → click a point → Point Detail Drawer opens with full metadata + content + Delete button (VLM-verified: "drawer visible with point metadata, Content section displays text, Delete button present, no visual issues").
+- Sync tab → Sync History Timeline shows 11 events with bootstrap/sync/queue/conflict entries, timestamps, relative times, and metric chips (12 pulled, 1 queued, 1 conflict).
+- Overview tab → Mini Recent Activity feed shows top events; remote device cards (gamma) now show a proper "knowledge hosted in cloud" info bar instead of empty fields; 0-contribution bars show dashed empty state.
+- Memory tab → typed incident text → "auto-tag" button enabled → click → cloud LLM classified as "critical / Safety hazard, production stop required" → criticality select auto-updated to "critical" + reason shown inline.
+- Lint clean (eslint . → 0 errors). Both services up (edge-engine :3030 uptime stable, next :3000 HTTP 200).
+
+Stage Summary:
+- All VLM-identified visual bugs fixed + 4 new features added (Point Detail Drawer, Sync History Timeline, Auto-tag on Write, Overview mini activity feed).
+- Project is feature-complete and polished for a hackathon demo. The edge↔cloud AI workflow is now richer: users can inspect any point's full payload, see a visual sync history timeline, auto-classify notes via the cloud LLM before writing, and the fleet overview is information-dense with no empty space.
+- Known limitation: Next.js dev server occasionally needs restart if the edge-engine restarts during a polling cycle (the cron reviewer should check `ps aux | grep next-server` and restart if the page renders blank). The edge-engine is stable with HTTP/1.0 + backlog=128 + manifest/contrib caching.

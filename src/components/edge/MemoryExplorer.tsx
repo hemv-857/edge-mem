@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Database, FileText, AlertTriangle, Gauge, HardDrive, Hash,
-  PenSquare, Zap, Loader2, CheckCircle2, CircuitBoard,
+  PenSquare, Zap, Loader2, CheckCircle2, CircuitBoard, Cloud, Sparkles,
 } from "lucide-react";
 import type { EdgeHook } from "@/hooks/use-edge";
 import type { EdgePoint, MemoryShard, WriteResult } from "@/lib/edge-types";
@@ -238,7 +238,8 @@ function PointsList({ edge, shard }: { edge: EdgeHook; shard: string }) {
           {points.map((p) => (
             <li
               key={p.id}
-              className="group rounded-lg border border-border/60 bg-background/40 p-3 transition-colors hover:border-border hover:bg-background/60"
+              onClick={() => edge.openPoint({ id: p.id, shard, ...p })}
+              className="group cursor-pointer rounded-lg border border-border/60 bg-background/40 p-3 transition-colors hover:border-emerald-500/30 hover:bg-background/60"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
@@ -296,8 +297,41 @@ function WriteForm({ edge, shard }: { edge: EdgeHook; shard: string }) {
   const [title, setTitle] = useState("");
   const [writing, setWriting] = useState(false);
   const [decision, setDecision] = useState<WriteResult | null>(null);
+  const [autoTagging, setAutoTagging] = useState(false);
+  const [autoTagReason, setAutoTagReason] = useState<string | null>(null);
+  const online = edge.syncStatus?.online ?? true;
 
   const canWrite = text.trim().length > 0 && !writing;
+
+  const handleAutoTag = useCallback(async () => {
+    if (!text.trim()) {
+      toast({ title: "Enter text first", description: "Type the note text before auto-tagging.", variant: "destructive" });
+      return;
+    }
+    if (!online) {
+      toast({ title: "Offline", description: "Cloud LLM auto-tag requires connectivity.", variant: "destructive" });
+      return;
+    }
+    setAutoTagging(true);
+    setAutoTagReason(null);
+    try {
+      const r = await fetch("/api/intelligence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "auto_tag", text: text.trim() }),
+      });
+      const data = await r.json();
+      if (!r.ok || !data.ok) throw new Error(data.error || "LLM failed");
+      setCriticality(data.criticality);
+      setSensitivity(data.sensitivity);
+      setAutoTagReason(data.reason);
+      toast({ title: "Auto-tagged by cloud LLM", description: `${data.criticality} · ${data.sensitivity} — ${data.reason}` });
+    } catch (e) {
+      toast({ title: "Auto-tag failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
+    } finally {
+      setAutoTagging(false);
+    }
+  }, [text, online]);
 
   const handleWrite = useCallback(async () => {
     if (!canWrite) return;
@@ -345,6 +379,18 @@ function WriteForm({ edge, shard }: { edge: EdgeHook; shard: string }) {
             {shard}
           </span>
         </div>
+        <button
+          onClick={handleAutoTag}
+          disabled={!online || autoTagging || !text.trim()}
+          title={online ? "Classify criticality & sensitivity via the cloud LLM" : "Cloud LLM requires connectivity"}
+          className={cn(
+            "flex items-center gap-1 rounded border px-2 py-1 font-mono text-[9px] uppercase tracking-wider transition-colors disabled:opacity-40",
+            online ? "border-sky-500/30 bg-sky-500/5 text-sky-300 hover:bg-sky-500/10" : "border-border text-muted-foreground"
+          )}
+        >
+          {autoTagging ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Cloud className="h-2.5 w-2.5" />}
+          auto-tag
+        </button>
       </div>
 
       <div className="space-y-3">
@@ -393,6 +439,14 @@ function WriteForm({ edge, shard }: { edge: EdgeHook; shard: string }) {
             </Select>
           </div>
         </div>
+
+        {autoTagReason && (
+          <div className="flex items-center gap-1.5 rounded-md border border-sky-500/25 bg-sky-500/5 px-2.5 py-1.5">
+            <Sparkles className="h-3 w-3 shrink-0 text-sky-300" />
+            <span className="font-mono text-[10px] text-sky-300">cloud LLM:</span>
+            <span className="text-[11px] text-muted-foreground">{autoTagReason}</span>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 gap-2.5">
           <div className="space-y-1.5">

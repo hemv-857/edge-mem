@@ -88,6 +88,25 @@ def h_points(body, qs):
         return 404, {"error": "unknown shard"}
     return 200, {"shard": shard, "device": dev.id, "points": dev.recent_points(shard, limit)}
 
+def h_get_point(body, qs):
+    dev_id = _device_id(body, qs)
+    shard = qs.get("shard", [None])[0]
+    point_id = qs.get("id", [None])[0]
+    if not shard or not point_id:
+        return 400, {"error": "shard and id required"}
+    p = fleet.get_point(dev_id, shard, point_id)
+    if p is None:
+        return 404, {"error": "point not found"}
+    return 200, p
+
+def h_delete_point(body, qs):
+    dev_id = body.get("device") or fleet.active_device
+    shard = body.get("shard")
+    point_id = body.get("id")
+    if not shard or not point_id:
+        return 400, {"error": "shard and id required"}
+    return 200, fleet.delete_point(dev_id, shard, point_id)
+
 def h_search(body, qs):
     try:
         return 200, fleet.search(body.get("device") or fleet.active_device,
@@ -155,6 +174,8 @@ ROUTES: Dict[tuple, Callable] = {
     ("GET",  "/api/edge/fleet"):            h_fleet,
     ("GET",  "/api/edge/memory"):           h_memory,
     ("GET",  "/api/edge/points"):           h_points,
+    ("GET",  "/api/edge/point"):            h_get_point,
+    ("POST", "/api/edge/point/delete"):     h_delete_point,
     ("POST", "/api/edge/search"):           h_search,
     ("POST", "/api/edge/write"):            h_write,
     ("POST", "/api/edge/connectivity"):     h_connectivity,

@@ -218,6 +218,16 @@ class ShardStore:
         p["_id"] = str(recs[0].id)
         return p
 
+    def delete_point(self, point_id: str) -> bool:
+        """Delete a point by id."""
+        try:
+            self.shard.update(UpdateOperation.delete_points([point_id]))
+            self._dirty = True
+            self.shard.flush()
+            return True
+        except Exception:
+            return False
+
     def optimize(self):
         # DISABLED: qdrant_edge's optimize() spawns background optimizer threads
         # that destabilise a long-running server process (the main thread idles
@@ -345,6 +355,23 @@ class Device:
                 "value": p.get("value"), "unit": p.get("unit"), "severity": p.get("severity"),
             })
         return out
+
+    def get_point(self, point_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single point's full payload (for the point detail drawer)."""
+        p = self.retrieve_payload(point_id)
+        if p is None:
+            return None
+        return p
+
+    def delete_point(self, point_id: str) -> bool:
+        """Delete a point by id (for the point detail drawer's delete action)."""
+        try:
+            self.shard.update(UpdateOperation.delete_points([point_id]))
+            self._dirty = True
+            self.shard.flush()
+            return True
+        except Exception:
+            return False
 
 
 def _dir_size(path: str) -> int:
@@ -768,6 +795,27 @@ class Fleet:
             "results": results, "latency_ms": round(ms, 2),
             "offline": not dev.online, "mode": mode, "shard": shard,
         }
+
+    def get_point(self, device_id: str, shard: str, point_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single point's full payload."""
+        dev = self.devices[device_id]
+        st = dev.shards.get(shard)
+        if not st:
+            return None
+        return st.retrieve_payload(point_id)
+
+    def delete_point(self, device_id: str, shard: str, point_id: str) -> Dict[str, Any]:
+        """Delete a point from a device shard (local only — does not touch cloud)."""
+        dev = self.devices[device_id]
+        st = dev.shards.get(shard)
+        if not st:
+            return {"ok": False, "reason": "unknown shard"}
+        ok = st.delete_point(point_id)
+        if ok:
+            self.log(device_id, "write", f"Deleted point {point_id[:12]}… from {shard}",
+                     {"shard": shard, "point_id": point_id, "action": "delete"})
+            dev.save_meta()
+        return {"ok": ok}
 
     def trigger_demo_conflict(self, device_id: str) -> Dict[str, Any]:
         """Manufacture a conflict: a known shared slug gets divergent edits on the

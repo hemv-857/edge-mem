@@ -12,6 +12,7 @@ import SearchPlayground from "@/components/edge/SearchPlayground";
 import SyncConsole from "@/components/edge/SyncConsole";
 import ActivityLog from "@/components/edge/ActivityLog";
 import PolicyEngine from "@/components/edge/PolicyEngine";
+import PointDetailDrawer from "@/components/edge/PointDetailDrawer";
 import { formatBytes, formatRelative } from "@/components/edge/edge-ui";
 
 export default function Home() {
@@ -87,6 +88,9 @@ export default function Home() {
           </span>
         </div>
       </footer>
+
+      {/* Point detail drawer — shared across all panels via edge.openPoint() */}
+      <PointDetailDrawer point={edge.activePoint} onClose={edge.closePoint} edge={edge} />
     </div>
   );
 }

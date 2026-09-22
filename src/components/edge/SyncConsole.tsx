@@ -2,12 +2,12 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { RefreshCw, DownloadCloud, ArrowUp, ArrowDown, AlertTriangle, Check, GitMerge, FileText, Network, Zap, HardDrive } from "lucide-react";
+import { RefreshCw, DownloadCloud, ArrowUp, ArrowDown, AlertTriangle, Check, GitMerge, FileText, Network, Zap, HardDrive, History, Cloud, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/hooks/use-toast";
 import type { EdgeHook } from "@/hooks/use-edge";
-import type { Conflict } from "@/lib/edge-types";
+import type { Conflict, ActivityEntry } from "@/lib/edge-types";
 import { Panel, StatCard, formatBytes, formatRelative, formatTime } from "./edge-ui";
 
 export default function SyncConsole({ edge }: { edge: EdgeHook }) {
@@ -59,7 +59,7 @@ export default function SyncConsole({ edge }: { edge: EdgeHook }) {
             </div>
             <div className="mt-1.5 flex items-center justify-between font-mono text-[10px] text-muted-foreground">
               <span>normal: {(ss?.queue_depth ?? 0) - (ss?.queue_critical ?? 0)}</span>
-              <span className="text-rose-400">critical: {ss?.queue_critical ?? 0}</span>
+              <span className={cn((ss?.queue_critical ?? 0) > 0 ? "text-rose-400" : "text-muted-foreground")}>critical: {ss?.queue_critical ?? 0}</span>
             </div>
           </div>
 
@@ -83,15 +83,22 @@ export default function SyncConsole({ edge }: { edge: EdgeHook }) {
           {/* manifest diffs */}
           {summary?.manifest_diffs && (
             <div className="mt-3">
-              <div className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Manifest-diff pull (cloud → edge)</div>
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Manifest-diff pull (cloud → edge)</span>
+                <span className="font-mono text-[9px] text-muted-foreground/70">checked {formatRelative(summary.at)}</span>
+              </div>
               <div className="mt-1.5 space-y-1">
                 {Object.entries(summary.manifest_diffs).map(([shard, diff]) => (
-                  <div key={shard} className="flex items-center gap-2 rounded border border-border bg-muted/30 px-2 py-1.5 font-mono text-[10px]">
+                  <div key={shard} className={cn("flex items-center gap-2 rounded border px-2 py-1.5 font-mono text-[10px]", diff.changed ? "border-emerald-500/25 bg-emerald-500/5" : "border-border bg-muted/30")}>
                     <span className="text-foreground">{shard}</span>
                     <span className={cn("rounded px-1.5 py-0.5 uppercase tracking-wider", diff.changed ? "bg-emerald-500/15 text-emerald-300" : "bg-muted text-muted-foreground")}>
                       {diff.changed ? "changed" : "unchanged"}
                     </span>
-                    <span className="ml-auto text-muted-foreground">{diff.last_hash || "—"} → {diff.cloud_hash}</span>
+                    {diff.changed ? (
+                      <span className="text-emerald-300/70">{diff.last_hash || "—"} → {diff.cloud_hash}</span>
+                    ) : (
+                      <span className="ml-auto text-muted-foreground/60">v{diff.cloud_hash}</span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -140,7 +147,110 @@ export default function SyncConsole({ edge }: { edge: EdgeHook }) {
           )}
         </Panel>
       </div>
+
+      {/* Sync History Timeline — visual timeline of past sync/bootstrap/connectivity events */}
+      <SyncHistoryTimeline activity={edge.activity} />
     </div>
+  );
+}
+
+function SyncHistoryTimeline({ activity }: { activity: ActivityEntry[] }) {
+  // Filter to sync-relevant events: sync, bootstrap, connectivity, conflict, queue
+  const syncEvents = activity.filter(
+    (a) => ["sync", "bootstrap", "connectivity", "conflict", "queue"].includes(a.kind)
+  ).slice(0, 14);
+
+  return (
+    <Panel
+      title="Sync History Timeline"
+      desc="Chronological edge↔cloud events — syncs, bootstraps, connectivity flips, conflicts"
+      right={
+        <div className="flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
+          <History className="h-3 w-3" />
+          {syncEvents.length} events
+        </div>
+      }
+    >
+      {syncEvents.length === 0 ? (
+        <div className="py-8 text-center text-xs text-muted-foreground">
+          No sync history yet. Run a Sync or Bootstrap to populate the timeline.
+        </div>
+      ) : (
+        <div className="relative">
+          {/* vertical rail */}
+          <div className="absolute left-[11px] top-1 bottom-1 w-px bg-border" />
+          <ol className="space-y-2.5">
+            {syncEvents.map((e, i) => {
+              const meta = e.meta ?? {};
+              const pushed = (meta.summary as { pushed?: number })?.pushed ?? (meta.pushed as number);
+              const pulled = (meta.summary as { pulled?: number })?.pulled ?? (meta.pulled as number);
+              const conflicts = (meta.summary as { new_conflicts?: number })?.new_conflicts ?? (meta.conflicts as number);
+              const queueDepth = meta.queue_depth as number;
+              return (
+                <li key={`${e.ts}-${i}`} className="relative flex items-start gap-3 pl-1">
+                  {/* node */}
+                  <span className={cn(
+                    "relative z-10 mt-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border-2 border-background",
+                    e.kind === "sync" && "bg-emerald-500",
+                    e.kind === "bootstrap" && "bg-sky-500",
+                    e.kind === "connectivity" && "bg-amber-500",
+                    e.kind === "conflict" && "bg-rose-500",
+                    e.kind === "queue" && "bg-amber-400",
+                  )}>
+                    <span className="h-1 w-1 rounded-full bg-white" />
+                  </span>
+                  {/* content */}
+                  <div className="min-w-0 flex-1 pb-0.5">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span className={cn(
+                        "rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider",
+                        e.kind === "sync" && "bg-emerald-500/15 text-emerald-300",
+                        e.kind === "bootstrap" && "bg-sky-500/15 text-sky-300",
+                        e.kind === "connectivity" && "bg-amber-500/15 text-amber-300",
+                        e.kind === "conflict" && "bg-rose-500/15 text-rose-300",
+                        e.kind === "queue" && "bg-amber-400/15 text-amber-300",
+                      )}>
+                        {e.kind}
+                      </span>
+                      <span className="font-mono text-[10px] text-muted-foreground">
+                        {new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                      </span>
+                      <span className="font-mono text-[9px] text-muted-foreground/70">· {formatRelative(e.ts)}</span>
+                    </div>
+                    <p className="mt-0.5 truncate text-xs text-foreground/80">{e.message}</p>
+                    {/* metric chips */}
+                    {(pushed !== undefined || pulled !== undefined || conflicts !== undefined || queueDepth !== undefined) && (
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        {pushed !== undefined && pushed > 0 && (
+                          <span className="flex items-center gap-0.5 rounded border border-emerald-500/25 bg-emerald-500/5 px-1.5 py-0.5 font-mono text-[9px] text-emerald-300">
+                            <ArrowUp className="h-2.5 w-2.5" />{pushed}
+                          </span>
+                        )}
+                        {pulled !== undefined && pulled > 0 && (
+                          <span className="flex items-center gap-0.5 rounded border border-sky-500/25 bg-sky-500/5 px-1.5 py-0.5 font-mono text-[9px] text-sky-300">
+                            <ArrowDown className="h-2.5 w-2.5" />{pulled}
+                          </span>
+                        )}
+                        {conflicts !== undefined && conflicts > 0 && (
+                          <span className="flex items-center gap-0.5 rounded border border-rose-500/25 bg-rose-500/5 px-1.5 py-0.5 font-mono text-[9px] text-rose-300">
+                            <AlertTriangle className="h-2.5 w-2.5" />{conflicts}
+                          </span>
+                        )}
+                        {queueDepth !== undefined && queueDepth > 0 && (
+                          <span className="flex items-center gap-0.5 rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 font-mono text-[9px] text-amber-300">
+                            <Zap className="h-2.5 w-2.5" />{queueDepth} queued
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
+    </Panel>
   );
 }
 

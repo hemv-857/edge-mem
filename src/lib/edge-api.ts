@@ -63,6 +63,10 @@ export const edge = {
   memory: (device?: string) => edgeGet<MemoryStats>("memory", { device }),
   points: (shard: string, device?: string, limit = 12) =>
     edgeGet<{ shard: string; device: string; points: import("./edge-types").EdgePoint[] }>("points", { shard, device, limit }),
+  getPoint: (shard: string, id: string, device?: string) =>
+    edgeGet<Record<string, unknown>>("point", { shard, id, device }),
+  deletePoint: (shard: string, id: string, device?: string) =>
+    edgePost<{ ok: boolean; reason?: string }>("point/delete", { shard, id, device }),
   search: (p: { device?: string; shard: string; query: string; mode?: SearchMode; limit?: number }) =>
     edgePost<SearchResponse>("search", p),
   write: (p: {

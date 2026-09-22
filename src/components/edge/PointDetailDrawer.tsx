@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import {
   X, Trash2, Cloud, Loader2, FileText, Hash, Clock, Server,
-  ShieldAlert, Tag, Cpu, Gauge, BookOpen, AlertTriangle, Save, GitCompare, Search,
+  ShieldAlert, Tag, Cpu, Gauge, BookOpen, AlertTriangle, Save, GitCompare, Search, Copy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
@@ -172,9 +172,27 @@ export default function PointDetailDrawer({
             <h2 className="mt-1 truncate font-mono text-sm font-semibold text-foreground">{p.slug ?? point.id.slice(0, 12)}</h2>
             {p.title && <p className="truncate text-xs text-muted-foreground">{p.title}</p>}
           </div>
-          <button onClick={onClose} className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex shrink-0 items-center gap-0.5">
+            <button
+              onClick={() => navigator.clipboard?.writeText(point.id).then(() => toast({ title: "Copied", description: "point ID" }))}
+              title="Copy point ID"
+              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Copy className="h-3.5 w-3.5" />
+            </button>
+            {p.text && (
+              <button
+                onClick={() => navigator.clipboard?.writeText(p.text ?? "").then(() => toast({ title: "Copied", description: "point text" }))}
+                title="Copy text"
+                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <FileText className="h-3.5 w-3.5" />
+              </button>
+            )}
+            <button onClick={onClose} className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {/* body — scrollable */}

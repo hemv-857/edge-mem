@@ -311,3 +311,28 @@ Stage Summary:
 - 2 features (metrics export + bar improvements, policy decision-flow diagram).
 - The Metrics tab now exports its event breakdown as TSV, and the Policy simulate panel shows a visual tags→rules→decision flow that makes the routing logic scannable at a glance.
 - No unresolved issues; project remains stable and lint-clean across 7 tabs. The app is demo-ready with: command palette, fleet learning hero, guided walkthrough, auto-sync, searchable/exportable activity log, policy simulation + decision-flow, mode comparison, system health, similar-points, point drawer, template-assisted writes, diff-highlighted conflict resolution, metrics export, and full mobile responsiveness.
+
+---
+Task ID: cron-review-9
+Agent: main (cron webDevReview round 9)
+Task: QA via VLM (search results + distill SOP), add recent searches + copy actions + point drawer copy.
+
+Work Log:
+- Reviewed worklog.md — project had 7 tabs, feature-complete after cron-review-8 (metrics export, policy decision-flow). Cloud at 13 points, edge-engine uptime 3217s.
+- Fresh QA: opened app via gateway, bootstrapped, ran the full search + distill-SOP flow. Screenshotted search results + distill result, ran VLM (z-ai vision) on both. VLM-verified the distill SOP: "distilled SOP visible with 8 numbered steps, Save to manuals button present, no visual issues". VLM flagged: no recent searches, no copy query/result actions.
+
+NEW FEATURES (browser-verified + VLM-verified):
+1. Search Playground — recent searches + copy query (SearchPlayground.tsx): added a "Recent searches" section (persists to localStorage, top 5, deduped by query) that loads on mount and shows clickable sky-accented chips with shard prefix + truncated query. Clicking a recent search restores the shard + mode + query and re-runs. Includes a "clear" button to wipe history. Added a "copy query" action (Copy icon) that appears when the textarea has text, copying the query to the clipboard with a toast. VLM-verified: "RECENT SEARCHES section visible with 2 clickable chips (inc/ bearing vibration, inc/ vibration outer race bearing d...)".
+2. Point Detail Drawer — copy point ID + copy text (PointDetailDrawer.tsx): added 2 copy action buttons to the drawer header next to the close button: a Copy-icon button (copies the full point UUID) and a FileText-icon button (copies the point's text content). Both show a toast on success. DOM-verified: "2 copy buttons: Copy point ID, Copy text".
+
+VERIFICATION (agent-browser through gateway):
+- Search tab → type "bearing vibration" → Search → results show → localStorage has 2 recent entries → reload → "RECENT SEARCHES" section renders with 2 clickable chips. VLM-verified.
+- Search tab → query text present → "copy query" action visible (by design, only when textarea has text).
+- Memory tab → click a point → drawer opens → header has 2 copy buttons (Copy point ID + Copy text). DOM-verified.
+- Distill SOP flow verified: online → search → DISTILL → SOP → 8 numbered steps + Save button. VLM-verified.
+- Lint clean (eslint . → 0 errors). Both services stable (edge-engine :3030, next :3000 HTTP 200, cloud=13).
+
+Stage Summary:
+- 2 features (recent searches + copy query, point drawer copy actions).
+- The Search Playground now remembers recent queries (persisted across reloads) and lets users copy the query; the Point Detail Drawer lets users copy the point ID or text for sharing/export.
+- No unresolved issues; project remains stable and lint-clean across 7 tabs. The app is demo-ready with: command palette, fleet learning hero, guided walkthrough, auto-sync, searchable/exportable activity log, policy simulation + decision-flow, mode comparison, system health, similar-points, point drawer + copy actions, template-assisted writes, diff-highlighted conflict resolution, metrics export, recent searches, and full mobile responsiveness.

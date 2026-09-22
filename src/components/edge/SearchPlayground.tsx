@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { Search, Zap, Wifi, WifiOff, Sparkles, Quote, Cloud, Save, Loader2, GitCompare } from "lucide-react";
+import { Search, Zap, Wifi, WifiOff, Sparkles, Quote, Cloud, Save, Loader2, GitCompare, Copy, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -38,7 +38,31 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
   const [distilled, setDistilled] = useState<Record<string, { sop: string; saving: boolean }>>({});
   const [compare, setCompare] = useState<Record<string, SearchResponse> | null>(null);
   const [comparing, setComparing] = useState(false);
+  const [recent, setRecent] = useState<{ q: string; shard: string; mode: SearchMode; ts: number }[]>([]);
   const online = edge.syncStatus?.online ?? true;
+
+  // load recent searches from localStorage on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("edge-recent-searches");
+      if (raw) setRecent(JSON.parse(raw));
+    } catch { /* ignore */ }
+  }, []);
+
+  function addRecent(q: string) {
+    setRecent((prev) => {
+      const next = [{ q, shard, mode, ts: Date.now() }, ...prev.filter((r) => r.q !== q)].slice(0, 5);
+      try { localStorage.setItem("edge-recent-searches", JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }
+
+  function copyToClipboard(text: string, label: string) {
+    navigator.clipboard?.writeText(text).then(
+      () => toast({ title: "Copied", description: label }),
+      () => toast({ title: "Copy failed", variant: "destructive" }),
+    );
+  }
 
   async function run(q?: string) {
     const text = (q ?? query).trim();
@@ -52,6 +76,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
     try {
       const r = await edge.search(text, shard, mode, limit);
       setRes(r);
+      addRecent(text);
     } catch (e) {
       toast({ title: "Search failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
     } finally {
@@ -235,6 +260,45 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
             ))}
           </div>
         </div>
+
+        {/* recent searches (persisted in localStorage) */}
+        {recent.length > 0 && (
+          <div className="mt-3">
+            <div className="mb-1.5 flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                <Clock className="h-3 w-3" /> Recent searches
+              </div>
+              <button
+                onClick={() => { setRecent([]); try { localStorage.removeItem("edge-recent-searches"); } catch { /* ignore */ } }}
+                className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground/60 hover:text-foreground"
+              >clear</button>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {recent.map((r) => (
+                <button
+                  key={r.q + r.ts}
+                  onClick={() => { setShard(r.shard); setMode(r.mode); setQuery(r.q); run(r.q); }}
+                  className="flex items-center gap-1 rounded-full border border-sky-500/20 bg-sky-500/5 px-2.5 py-1 text-left font-mono text-[10px] text-muted-foreground transition-colors hover:border-sky-500/40 hover:text-sky-300"
+                  title={`${r.shard} · ${r.mode}`}
+                >
+                  <span className="text-sky-400/60">{r.shard.slice(0, 3)}/</span>{r.q.length > 30 ? r.q.slice(0, 30) + "…" : r.q}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* copy query action */}
+        {query.trim() && (
+          <div className="mt-3 flex items-center justify-end">
+            <button
+              onClick={() => copyToClipboard(query, "query copied to clipboard")}
+              className="flex items-center gap-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground/60 transition-colors hover:text-foreground"
+            >
+              <Copy className="h-3 w-3" /> copy query
+            </button>
+          </div>
+        )}
       </Panel>
 
       {/* results */}

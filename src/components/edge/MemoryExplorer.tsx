@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Database, FileText, AlertTriangle, Gauge, HardDrive, Hash,
   PenSquare, Zap, Loader2, CheckCircle2, CircuitBoard, Cloud, Sparkles,
+  Search as SearchIcon, Filter, X,
 } from "lucide-react";
 import type { EdgeHook } from "@/hooks/use-edge";
 import type { EdgePoint, MemoryShard, WriteResult } from "@/lib/edge-types";
@@ -120,7 +121,7 @@ function ShardCard({
         <SyncStateBadge value={shard.default_sync} />
       </div>
 
-      <p className="mt-2 line-clamp-1 text-xs text-muted-foreground">{shard.desc}</p>
+      <p className="mt-2 line-clamp-1 min-h-[16px] text-xs text-muted-foreground">{shard.desc}</p>
 
       <div className="mt-3 flex items-end justify-between">
         <div>
@@ -170,11 +171,13 @@ function PointsList({ edge, shard }: { edge: EdgeHook; shard: string }) {
   const [points, setPoints] = useState<EdgePoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+  const [critFilter, setCritFilter] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     edgeApi
-      .points(shard, undefined, 20)
+      .points(shard, undefined, 50)
       .then((r) => {
         if (cancelled) return;
         setPoints(r.points);
@@ -196,22 +199,94 @@ function PointsList({ edge, shard }: { edge: EdgeHook; shard: string }) {
     // state inside async callbacks (no synchronous setState in the effect body).
   }, [shard, edge.memory]);
 
+  // derive stats + filtered list directly from points (no effect needed)
+  const stats = deriveStats(points);
+  const filtered = points.filter((p) => {
+    if (critFilter && p.criticality !== critFilter) return false;
+    if (filter.trim()) {
+      const q = filter.trim().toLowerCase();
+      const hay = `${p.slug ?? ""} ${p.title ?? ""} ${p.text ?? ""} ${p.asset_id ?? ""} ${p.origin_device ?? ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const critChips = ["critical", "high", "medium", "low"] as const;
+
   return (
     <div className="rounded-xl border border-border bg-card/40 p-4">
       <div className="mb-3 flex items-center justify-between border-b border-border/60 pb-2.5">
         <div className="flex items-center gap-2">
           <Database className="h-3.5 w-3.5 text-emerald-400" />
           <span className="font-mono text-xs font-semibold uppercase tracking-wider text-foreground">
-            recent points
+            points
           </span>
           <span className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
             {shard}
           </span>
         </div>
         <span className="font-mono text-[10px] text-muted-foreground">
-          {loading ? "loading…" : `${points.length} shown`}
+          {loading ? "loading…" : `${filtered.length}/${points.length} shown`}
         </span>
       </div>
+
+      {/* stats summary bar */}
+      {!loading && points.length > 0 && (
+        <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <StatMini label="total" value={stats.total} accent="text-foreground" />
+          <StatMini label="critical" value={stats.critical} accent={stats.critical > 0 ? "text-rose-400" : "text-muted-foreground"} />
+          <StatMini label="local-only" value={stats.localOnly} accent={stats.localOnly > 0 ? "text-amber-400" : "text-muted-foreground"} />
+          <StatMini label="origins" value={stats.origins} accent="text-sky-300" />
+        </div>
+      )}
+
+      {/* search + filter row */}
+      {!loading && points.length > 0 && (
+        <div className="mb-3 space-y-2">
+          <div className="relative">
+            <SearchIcon className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="filter by slug, text, asset, origin…"
+              className="h-8 w-full rounded-md border border-border bg-background/50 pl-8 pr-7 font-mono text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-emerald-500/40 focus:outline-none"
+            />
+            {filter && (
+              <button onClick={() => setFilter("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Filter className="h-3 w-3 shrink-0 text-muted-foreground" />
+            {critChips.map((c) => {
+              const count = stats.byCrit[c] ?? 0;
+              if (count === 0 && critFilter !== c) return null;
+              const isActive = critFilter === c;
+              return (
+                <button
+                  key={c}
+                  onClick={() => setCritFilter(isActive ? null : c)}
+                  className={cn(
+                    "flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider transition-colors",
+                    isActive
+                      ? c === "critical" ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
+                        : c === "high" ? "border-amber-500/40 bg-amber-500/15 text-amber-300"
+                        : c === "medium" ? "border-sky-500/40 bg-sky-500/15 text-sky-300"
+                        : "border-zinc-500/40 bg-zinc-500/15 text-zinc-300"
+                      : "border-border bg-card/40 text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {c} <span className="tabular-nums">{count}</span>
+                </button>
+              );
+            })}
+            {critFilter && (
+              <button onClick={() => setCritFilter(null)} className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground">clear</button>
+            )}
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="space-y-2">
@@ -233,9 +308,14 @@ function PointsList({ edge, shard }: { edge: EdgeHook; shard: string }) {
             bootstrap from cloud, or write one →
           </p>
         </div>
+      ) : filtered.length === 0 ? (
+        <div className="flex flex-col items-center justify-center gap-1.5 py-8 text-center">
+          <SearchIcon className="h-4 w-4 text-muted-foreground/50" />
+          <p className="text-xs text-muted-foreground">No points match the filter.</p>
+        </div>
       ) : (
         <ul className="max-h-[520px] space-y-2 overflow-y-auto edge-scroll pr-1">
-          {points.map((p) => (
+          {filtered.map((p) => (
             <li
               key={p.id}
               onClick={() => edge.openPoint({ id: p.id, shard, ...p })}
@@ -281,6 +361,34 @@ function PointsList({ edge, shard }: { edge: EdgeHook; shard: string }) {
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+function deriveStats(points: EdgePoint[]) {
+  const byCrit: Record<string, number> = {};
+  const origins = new Set<string>();
+  let localOnly = 0;
+  for (const p of points) {
+    const c = p.criticality ?? "medium";
+    byCrit[c] = (byCrit[c] ?? 0) + 1;
+    if (p.origin_device) origins.add(p.origin_device);
+    if (p.sync_state === "local_only") localOnly++;
+  }
+  return {
+    total: points.length,
+    critical: byCrit.critical ?? 0,
+    localOnly,
+    origins: origins.size,
+    byCrit,
+  };
+}
+
+function StatMini({ label, value, accent }: { label: string; value: React.ReactNode; accent?: string }) {
+  return (
+    <div className="rounded-md border border-border bg-background/30 px-2 py-1.5">
+      <div className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className={cn("font-mono text-sm font-semibold tabular-nums", accent ?? "text-foreground")}>{value}</div>
     </div>
   );
 }

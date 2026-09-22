@@ -216,7 +216,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
           {res.results.length === 0 ? (
             <div className="py-10 text-center text-sm text-muted-foreground">No matches. Try a different query or shard.</div>
           ) : (
-            <div className="space-y-2.5">
+            <div className="space-y-2.5 edge-stagger">
               {res.results.map((r, i) => {
                 const maxScore = res.results[0]?.score ?? 1;
                 const pct = Math.max(4, Math.round((r.score / (maxScore || 1)) * 100));

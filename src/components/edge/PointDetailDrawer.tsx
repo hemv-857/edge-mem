@@ -4,12 +4,13 @@ import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import {
   X, Trash2, Cloud, Loader2, FileText, Hash, Clock, Server,
-  ShieldAlert, Tag, Cpu, Gauge, BookOpen, AlertTriangle, Save,
+  ShieldAlert, Tag, Cpu, Gauge, BookOpen, AlertTriangle, Save, GitCompare, Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
 import { edge as edgeApi } from "@/lib/edge-api";
 import type { EdgeHook } from "@/hooks/use-edge";
+import type { SearchResult } from "@/lib/edge-types";
 import { CriticalityBadge, SyncStateBadge, formatBytes, formatRelative, formatTime } from "./edge-ui";
 
 export interface PointRef {
@@ -49,17 +50,41 @@ export default function PointDetailDrawer({
   const [deleting, setDeleting] = useState(false);
   const [distilling, setDistilling] = useState(false);
   const [distilledSop, setDistilledSop] = useState<string | null>(null);
+  const [similar, setSimilar] = useState<{ shard: string; results: SearchResult[] }[] | null>(null);
+  const [loadingSimilar, setLoadingSimilar] = useState(false);
   const online = edge.syncStatus?.online ?? true;
 
   useEffect(() => {
-    if (!point) { setFull(null); setDistilledSop(null); return; }
+    if (!point) { setFull(null); setDistilledSop(null); setSimilar(null); return; }
     setLoading(true);
     setDistilledSop(null);
+    setSimilar(null);
     edgeApi.getPoint(point.shard, point.id)
       .then((p) => setFull(p))
       .catch(() => setFull(null))
       .finally(() => setLoading(false));
   }, [point]);
+
+  // find similar points across all shards using this point's text as the query
+  async function handleFindSimilar() {
+    if (!p.text) return;
+    setLoadingSimilar(true);
+    setSimilar(null);
+    try {
+      const shards = ["manuals", "incidents", "sensors"];
+      const results = await Promise.all(
+        shards.map(async (sh) => {
+          try {
+            const r = await edgeApi.search({ shard: sh, query: p.text!, mode: "hybrid", limit: 3 });
+            return { shard: sh, results: r.results.filter((x) => x.id !== point!.id).slice(0, 3) };
+          } catch { return { shard: sh, results: [] }; }
+        })
+      );
+      setSimilar(results.filter((r) => r.results.length > 0));
+    } finally {
+      setLoadingSimilar(false);
+    }
+  }
 
   // close on Escape
   useEffect(() => {
@@ -210,6 +235,63 @@ export default function PointDetailDrawer({
               )}
             </div>
           )}
+
+          {/* similar points — semantic "related knowledge" via hybrid search */}
+          <div className="mt-3">
+            <div className="mb-1 flex items-center justify-between">
+              <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                <GitCompare className="h-3 w-3 text-emerald-400" /> Similar points
+              </div>
+              {similar === null && !loadingSimilar && (
+                <button
+                  onClick={handleFindSimilar}
+                  disabled={!p.text}
+                  className="flex items-center gap-1 rounded border border-emerald-500/30 bg-emerald-500/5 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-emerald-300 transition-colors hover:bg-emerald-500/10 disabled:opacity-40"
+                >
+                  <Search className="h-2.5 w-2.5" /> find similar
+                </button>
+              )}
+            </div>
+            {loadingSimilar && (
+              <div className="flex items-center gap-2 rounded-lg border border-border bg-background/40 p-3 text-xs text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" /> searching across all shards…
+              </div>
+            )}
+            {similar && similar.length === 0 && (
+              <div className="rounded-lg border border-dashed border-border bg-background/30 p-3 text-center text-xs text-muted-foreground">
+                No similar points found.
+              </div>
+            )}
+            {similar && similar.map((group) => (
+              <div key={group.shard} className="mb-2">
+                <div className="mb-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground/70">{group.shard}</div>
+                <div className="space-y-1">
+                  {group.results.map((r) => (
+                    <button
+                      key={r.id}
+                      onClick={(e) => { e.stopPropagation(); edge.openPoint({ id: r.id, shard: group.shard, ...r }); }}
+                      className="block w-full rounded-md border border-border bg-background/40 p-2 text-left transition-colors hover:border-emerald-500/30 hover:bg-background/60"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate font-mono text-[11px] font-semibold text-foreground">{r.slug ?? r.id.slice(0, 8)}</span>
+                        <span className="shrink-0 font-mono text-[9px] tabular-nums text-emerald-400">{r.score.toFixed(3)}</span>
+                      </div>
+                      <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{r.text}</p>
+                      {r.origin_device && <span className="mt-0.5 inline-block font-mono text-[9px] text-sky-300">@{r.origin_device}</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {similar && similar.length > 0 && (
+              <button
+                onClick={handleFindSimilar}
+                className="mt-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground"
+              >
+                ↻ re-run search
+              </button>
+            )}
+          </div>
 
           {/* extra payload keys */}
           {extraKeys.length > 0 && (

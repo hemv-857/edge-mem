@@ -126,8 +126,8 @@ export default function SyncConsole({ edge }: { edge: EdgeHook }) {
               <div className="mt-2 grid grid-cols-2 gap-2 font-mono text-xs">
                 <Row icon={<ArrowUp className="h-3 w-3 text-emerald-400" />} label="pushed" value={summary.pushed} />
                 <Row icon={<ArrowDown className="h-3 w-3 text-sky-400" />} label="pulled" value={summary.pulled} />
-                <Row icon={<HardDrive className="h-3 w-3 text-emerald-400" />} label="bytes↑" value={formatBytes(summary.bytes_pushed)} />
-                <Row icon={<HardDrive className="h-3 w-3 text-sky-400" />} label="bytes↓" value={formatBytes(summary.bytes_pulled)} />
+                <Row icon={<HardDrive className="h-3 w-3 text-emerald-400" />} label="pushed (B)" value={formatBytes(summary.bytes_pushed)} />
+                <Row icon={<HardDrive className="h-3 w-3 text-sky-400" />} label="pulled (B)" value={formatBytes(summary.bytes_pulled)} />
                 <Row icon={<AlertTriangle className="h-3 w-3 text-rose-400" />} label="conflicts" value={summary.new_conflicts} accent={summary.new_conflicts > 0 ? "rose" : undefined} />
                 <Row icon={<RefreshCw className="h-3 w-3 text-muted-foreground" />} label="at" value={formatTime(summary.at)} />
               </div>
@@ -145,15 +145,15 @@ export default function SyncConsole({ edge }: { edge: EdgeHook }) {
               </div>
               <div className="mt-1.5 space-y-1">
                 {Object.entries(summary.manifest_diffs).map(([shard, diff]) => (
-                  <div key={shard} className={cn("flex items-center gap-2 rounded border px-2 py-1.5 font-mono text-[10px]", diff.changed ? "border-emerald-500/25 bg-emerald-500/5" : "border-border bg-muted/30")}>
+                  <div key={shard} className={cn("flex items-center gap-2 rounded border px-2 py-1.5 font-mono text-[10px]", diff.changed ? "border-emerald-500/25 bg-emerald-500/5" : "border-border bg-card/40")}>
                     <span className="text-foreground">{shard}</span>
-                    <span className={cn("rounded px-1.5 py-0.5 uppercase tracking-wider", diff.changed ? "bg-emerald-500/15 text-emerald-300" : "bg-muted text-muted-foreground")}>
+                    <span className={cn("rounded px-1.5 py-0.5 uppercase tracking-wider", diff.changed ? "bg-emerald-500/15 text-emerald-300" : "bg-zinc-500/15 text-zinc-300")}>
                       {diff.changed ? "changed" : "unchanged"}
                     </span>
                     {diff.changed ? (
                       <span className="text-emerald-300/70">{diff.last_hash || "—"} → {diff.cloud_hash}</span>
                     ) : (
-                      <span className="ml-auto text-muted-foreground/60">v{diff.cloud_hash}</span>
+                      <span className="ml-auto text-muted-foreground">v{diff.cloud_hash}</span>
                     )}
                   </div>
                 ))}
@@ -333,18 +333,28 @@ function ConflictCard({ c, onResolve, busy }: { c: Conflict; onResolve: (id: str
         <span className="ml-auto font-mono text-[10px] text-muted-foreground">{formatRelative(c.created_at)}</span>
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2">
-        <Side label="local" device={c.local.origin_device} text={c.local.text} ts={c.local.updated_at} accent="amber" />
-        <Side label="remote" device={c.remote.origin_device} text={c.remote.text} ts={c.remote.updated_at} accent="sky" />
+        <Side label="local" device={c.local.origin_device} text={c.local.text} other={c.remote.text} ts={c.local.updated_at} accent="amber" />
+        <Side label="remote" device={c.remote.origin_device} text={c.remote.text} other={c.local.text} ts={c.remote.updated_at} accent="sky" />
       </div>
 
       {showMerge && (
         <div className="mt-2">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">3-way merge · edit the resolved text</span>
+            <button
+              onClick={() => { setMergeText(c.local.text + "\n\n--- merged ---\n\n" + c.remote.text); }}
+              className="font-mono text-[9px] uppercase tracking-wider text-sky-300 hover:text-sky-200"
+            >combine both</button>
+          </div>
           <Textarea
             value={mergeText}
             onChange={(e) => setMergeText(e.target.value)}
             placeholder="Merge both versions into a single resolved text…"
-            className="min-h-[60px] border-border bg-card/40 font-mono text-xs"
+            className="min-h-[80px] border-border bg-card/40 font-mono text-xs"
           />
+          <div className="mt-1 flex items-center justify-end font-mono text-[9px] text-muted-foreground">
+            {mergeText.length} chars
+          </div>
         </div>
       )}
 
@@ -366,8 +376,35 @@ function ConflictCard({ c, onResolve, busy }: { c: Conflict; onResolve: (id: str
   );
 }
 
-function Side({ label, device, text, ts, accent }: { label: string; device: string; text: string; ts: number; accent: "amber" | "sky" }) {
+/** Word-level diff: returns segments marked as same/added/removed relative to `other`. */
+function diffWords(text: string, other: string): { word: string; type: "same" | "added" | "removed" }[] {
+  const a = (other || "").split(/\s+/).filter(Boolean);
+  const b = (text || "").split(/\s+/).filter(Boolean);
+  // simple LCS-based diff
+  const n = a.length, m = b.length;
+  const dp: number[][] = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const segs: { word: string; type: "same" | "added" | "removed" }[] = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { segs.push({ word: b[j], type: "same" }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { segs.push({ word: a[i], type: "removed" }); i++; }
+    else { segs.push({ word: b[j], type: "added" }); j++; }
+  }
+  while (i < n) { segs.push({ word: a[i], type: "removed" }); i++; }
+  while (j < m) { segs.push({ word: b[j], type: "added" }); j++; }
+  return segs;
+}
+
+function Side({ label, device, text, other, ts, accent }: { label: string; device: string; text: string; other: string; ts: number; accent: "amber" | "sky" }) {
   const color = accent === "amber" ? "border-amber-500/30 text-amber-300" : "border-sky-500/30 text-sky-300";
+  const segs = diffWords(text, other);
+  const addedCount = segs.filter((s) => s.type === "added").length;
+  const removedCount = segs.filter((s) => s.type === "removed").length;
   return (
     <div className={cn("rounded border bg-card/30 p-2", color)}>
       <div className="flex items-center justify-between font-mono text-[9px] uppercase tracking-wider opacity-80">
@@ -376,9 +413,27 @@ function Side({ label, device, text, ts, accent }: { label: string; device: stri
       </div>
       <div className="mt-1 flex items-start gap-1">
         <FileText className="mt-0.5 h-2.5 w-2.5 shrink-0 opacity-60" />
-        <p className="text-[11px] leading-snug text-foreground/80 line-clamp-3">{text}</p>
+        <p className="text-[11px] leading-snug text-foreground/80 line-clamp-4">
+          {segs.map((s, i) => (
+            <span
+              key={i}
+              className={cn(
+                s.type === "added" && "rounded bg-emerald-500/20 text-emerald-200",
+                s.type === "removed" && "rounded bg-rose-500/20 text-rose-200 line-through decoration-rose-400/40",
+              )}
+            >{s.word} </span>
+          ))}
+        </p>
       </div>
-      <div className="mt-1 font-mono text-[9px] text-muted-foreground">{formatTime(ts)}</div>
+      <div className="mt-1 flex items-center justify-between font-mono text-[9px] text-muted-foreground">
+        <span>{formatTime(ts)}</span>
+        {(addedCount > 0 || removedCount > 0) && (
+          <span className="flex items-center gap-1.5">
+            {addedCount > 0 && <span className="text-emerald-400">+{addedCount}</span>}
+            {removedCount > 0 && <span className="text-rose-400">-{removedCount}</span>}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

@@ -95,9 +95,20 @@ export default function Home() {
 
       {/* Sticky footer */}
       <footer className="mt-auto border-t border-border/60 bg-card/30 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-5 gap-y-1 px-4 py-2.5 sm:px-6">
+        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-5 gap-y-1.5 px-4 py-2.5 sm:px-6">
           <span className="font-mono text-[10px] font-bold tracking-wider text-muted-foreground">EDGE.MEM</span>
-          <span className="text-[10px] text-muted-foreground">Offline-first semantic memory · Qdrant Edge + FastEmbed + BM25</span>
+          <span className="hidden text-[10px] text-muted-foreground sm:inline">Offline-first semantic memory · Qdrant Edge + FastEmbed + BM25</span>
+          {/* keyboard shortcut hints */}
+          <span className="hidden items-center gap-2 font-mono text-[10px] text-muted-foreground lg:flex">
+            <span className="flex items-center gap-1">
+              <kbd className="rounded border border-border bg-muted px-1 py-0.5 text-[8px]">⌘K</kbd>
+              <span className="text-muted-foreground/70">command</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="rounded border border-border bg-muted px-1 py-0.5 text-[8px]">esc</kbd>
+              <span className="text-muted-foreground/70">close</span>
+            </span>
+          </span>
           <span className="ml-auto flex items-center gap-4 font-mono text-[10px] text-muted-foreground">
             <span>link: <span className={online ? "text-emerald-400" : "text-amber-400"}>{online ? "ONLINE" : "OFFLINE"}</span></span>
             <span>shards: <span className="text-foreground">{edge.memory ? Object.keys(edge.memory.shards).length : 0}</span></span>

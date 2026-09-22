@@ -1,13 +1,16 @@
 "use client";
 
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 import {
   Cpu, Cloud, Bot, Monitor, ArrowRightLeft, TrendingUp, Database,
   BookOpen, AlertTriangle, Activity as ActivityIcon, Gauge, Server,
+  PlayCircle, Check, X, WifiOff, Search as SearchIcon, RefreshCw, CloudOff,
 } from "lucide-react";
 import type { EdgeHook } from "@/hooks/use-edge";
 import { Panel, StatCard, StatusDot, formatRelative, formatBytes } from "./edge-ui";
 import type { FleetOverview as FleetData, ActivityEntry } from "@/lib/edge-types";
+import { toast } from "@/hooks/use-toast";
 
 const KIND_ICON: Record<string, React.ReactNode> = {
   robot: <Bot className="h-4 w-4" />,
@@ -50,6 +53,9 @@ export default function FleetOverview({ edge }: { edge: EdgeHook }) {
         <StatCard label="Pending syncs" value={data.devices.reduce((a, d) => a + d.queue_depth, 0)} sub="queued across fleet" accent={(data.devices.reduce((a, d) => a + d.queue_depth, 0)) > 0 ? "amber" : "default"} icon={<ArrowRightLeft className="h-4 w-4" />} />
         <StatCard label="Open conflicts" value={data.devices.reduce((a, d) => a + d.open_conflicts, 0)} sub="awaiting resolution" accent={(data.devices.reduce((a, d) => a + d.open_conflicts, 0)) > 0 ? "rose" : "default"} icon={<TrendingUp className="h-4 w-4" />} />
       </div>
+
+      {/* demo walkthrough */}
+      <DemoWalkthrough edge={edge} />
 
       <div className="grid gap-5 lg:grid-cols-3">
         {/* Device cards */}
@@ -275,6 +281,134 @@ function Skeleton() {
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="h-64 animate-pulse rounded-xl border border-border bg-card/40 lg:col-span-2" />
         <div className="h-64 animate-pulse rounded-xl border border-border bg-card/40" />
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* demo walkthrough — guided golden path                                       */
+/* -------------------------------------------------------------------------- */
+
+const DEMO_STEPS = [
+  { id: "bootstrap", icon: <Cloud className="h-3.5 w-3.5" />, title: "Bootstrap from cloud", desc: "Pull the full cloud snapshot (12 points) into device-alpha's local EdgeShard memory.", action: "bootstrap" },
+  { id: "offline", icon: <WifiOff className="h-3.5 w-3.5" />, title: "Go offline", desc: "Toggle connectivity off — the device keeps operating from local memory.", action: "offline" },
+  { id: "search", icon: <SearchIcon className="h-3.5 w-3.5" />, title: "Search offline", desc: "Run a hybrid query — sub-50ms retrieval with zero network calls.", action: "search" },
+  { id: "write", icon: <AlertTriangle className="h-3.5 w-3.5" />, title: "Log an incident", desc: "Write a critical anomaly note — it jumps the sync queue.", action: "write" },
+  { id: "online", icon: <Cloud className="h-3.5 w-3.5" />, title: "Reconnect + sync", desc: "Go online + sync — the incident pushes up, fleet fixes pull down.", action: "online" },
+  { id: "conflict", icon: <RefreshCw className="h-3.5 w-3.5" />, title: "Manufacture + resolve a conflict", desc: "Surface a divergent edit and resolve it (merge).", action: "conflict" },
+] as const;
+
+function DemoWalkthrough({ edge }: { edge: EdgeHook }) {
+  const [running, setRunning] = useState(false);
+  const [activeStep, setActiveStep] = useState<number>(-1);
+  const [done, setDone] = useState<Set<number>>(new Set());
+
+  const memory = edge.memory;
+  const totalPoints = memory?.total_points ?? 0;
+  const online = edge.syncStatus?.online ?? true;
+  const queueDepth = edge.syncStatus?.queue_depth ?? 0;
+  const conflicts = edge.syncStatus?.open_conflicts.length ?? 0;
+
+  // auto-detect completion state from live data
+  const autoDone = new Set<number>();
+  if (totalPoints > 0) autoDone.add(0);
+  if (!online) autoDone.add(1);
+  if (queueDepth > 0) autoDone.add(3);
+  if (online && queueDepth === 0 && totalPoints > 0) autoDone.add(4);
+  if (conflicts > 0 || (edge.syncStatus?.resolved_conflicts.length ?? 0) > 0) autoDone.add(5);
+  const allDone = new Set([...done, ...autoDone]);
+
+  async function runStep(idx: number) {
+    const step = DEMO_STEPS[idx];
+    setActiveStep(idx);
+    setRunning(true);
+    try {
+      switch (step.action) {
+        case "bootstrap":
+          await edge.bootstrap();
+          toast({ title: "Bootstrapped", description: "Pulled 12 points from cloud" });
+          break;
+        case "offline":
+          await edge.setOnline(false);
+          toast({ title: "Offline", description: "Device now in local-only mode" });
+          break;
+        case "search":
+          toast({ title: "→ Search tab", description: "Run a query to see offline hybrid retrieval" });
+          break;
+        case "write":
+          await edge.write({ shard: "incidents", text: "P-201 drive-end vibration 9.2mm/s, BPFO 142Hz — suspected outer race defect. Isolating pump.", criticality: "critical", asset_id: "P-201", title: "P-201 Vibration Spike" });
+          toast({ title: "Incident written", description: "Critical → sync_now (jumps queue)" });
+          break;
+        case "online":
+          await edge.setOnline(true);
+          await new Promise((r) => setTimeout(r, 500));
+          await edge.sync();
+          toast({ title: "Synced", description: "Incident pushed up, fleet fixes pulled down" });
+          break;
+        case "conflict":
+          await edge.demoConflict();
+          await new Promise((r) => setTimeout(r, 500));
+          await edge.sync();
+          toast({ title: "Conflict surfaced", description: "Go to Sync tab to resolve it" });
+          break;
+      }
+      setDone((prev) => new Set([...prev, idx]));
+    } catch (e) {
+      toast({ title: "Step failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
+    } finally {
+      setRunning(false);
+      setActiveStep(-1);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-card/40 p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <PlayCircle className="h-4 w-4 text-emerald-400" />
+          <h3 className="font-mono text-xs font-semibold uppercase tracking-wider text-foreground">Demo Walkthrough</h3>
+          <span className="font-mono text-[10px] text-muted-foreground">— the golden edge↔cloud path</span>
+        </div>
+        <span className="font-mono text-[10px] text-muted-foreground">{allDone.size}/{DEMO_STEPS.length} done</span>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {DEMO_STEPS.map((step, i) => {
+          const isDone = allDone.has(i);
+          const isActive = activeStep === i;
+          return (
+            <button
+              key={step.id}
+              onClick={() => runStep(i)}
+              disabled={running}
+              className={cn(
+                "group flex items-start gap-2.5 rounded-lg border p-2.5 text-left transition-all disabled:opacity-50",
+                isDone ? "border-emerald-500/30 bg-emerald-500/[0.04]"
+                  : isActive ? "border-emerald-500/50 bg-emerald-500/10 edge-glow-emerald"
+                  : "border-border bg-background/40 hover:border-border/80"
+              )}
+            >
+              <span className={cn(
+                "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border",
+                isDone ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                  : "border-border bg-muted text-muted-foreground"
+              )}>
+                {isDone ? <Check className="h-3 w-3" /> : <span className="font-mono text-[10px] tabular-nums">{i + 1}</span>}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <span className={cn("shrink-0", isDone ? "text-emerald-300" : "text-muted-foreground")}>{step.icon}</span>
+                  <span className="truncate font-mono text-[11px] font-semibold text-foreground">{step.title}</span>
+                </div>
+                <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">{step.desc}</p>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-2 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
+        <X className="h-3 w-3 text-muted-foreground/40" />
+        <span>steps auto-check as you complete them · switch tabs anytime · the walkthrough persists</span>
       </div>
     </div>
   );

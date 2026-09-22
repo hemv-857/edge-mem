@@ -187,3 +187,28 @@ Stage Summary:
 - 3 new features (Policy Simulate, Search Compare modes, System Health score) + 3 bug fixes (text wrapping, IN display, zero-byte sync clarity).
 - The Policy Engine now demonstrates its routing logic interactively (simulate before write), the Search Playground proves RRF's value (compare modes), and the Metrics tab has an at-a-glance health score for judges.
 - No unresolved issues; project remains stable and lint-clean across 7 tabs.
+
+---
+Task ID: cron-review-4
+Agent: main (cron webDevReview round 4)
+Task: QA via VLM, add Activity Log search/export/stats, Sync auto-sync toggle, Overview demo walkthrough.
+
+Work Log:
+- Reviewed worklog.md — project had 7 tabs, was feature-complete and lint-clean after cron-review-3 (Policy Simulate, Search Compare modes, System Health score).
+- Fresh QA: opened app via gateway, screenshotted Sync/Activity/Overview/conflict-card, ran VLM (z-ai vision) on Sync and Activity tabs. VLM flagged: no text search/export in Activity Log; no auto-sync in Sync Console; no guided demo walkthrough. (Recurring "N" badge confirmed hallucination — DOM-verified empty.)
+
+NEW FEATURES (all browser-verified + VLM-verified):
+1. Activity Log — search + stats + export (ActivityLog.tsx): added a text search input (filters by message/kind/device/meta JSON, with clear-X button), a top stats summary bar (top-4 kinds with colored dots + counts + percentage mini-bars), and an "export" button that downloads the visible (filtered) events as a TSV file (timestamp/device/kind/message/meta). The header shows "visible/total events" when filtered. Verified: typing "sync" → 8/37 events.
+2. Sync auto-sync toggle (SyncConsole.tsx): a new auto-sync banner below the top stats with a Timer icon (pulses when running), a Switch toggle, and an interval selector (15s/30s/60s/2m). When ON + online, a 2s interval checks if there's queue depth OR the configured interval has elapsed, then triggers edge.sync() automatically. Shows "running · every Ns" when online, "paused (offline)" when offline, "off" when disabled. Verified: toggled ON while offline → "paused (offline)"; went online → "running · every 30s". VLM-verified: "banner visible with toggle + interval selector, clean, no visual issues".
+3. Demo Walkthrough (FleetOverview.tsx): a new guided 6-step card on the Overview tab walking through the golden edge↔cloud path: (1) Bootstrap from cloud, (2) Go offline, (3) Search offline, (4) Log an incident, (5) Reconnect + sync, (6) Manufacture + resolve a conflict. Each step is a clickable button that runs the action (bootstrap/setOnline/write/demoConflict+sync) with a toast. Steps auto-check as completed (detected from live data: bootstrap→points>0, offline→!online, write→queue>0, sync→online+queue=0, conflict→conflicts>0 or resolved>0). The active step glows emerald; done steps show a green check. Header shows "N/6 done". Verified: clicked Bootstrap → 3/6 auto-checked. VLM-verified: "6 steps visible, steps 1/5/6 show green checkmarks, header 3/6 done".
+
+VERIFICATION (agent-browser through gateway):
+- Overview → Demo Walkthrough card renders with 6 steps → click Bootstrap → 3/6 done (auto-detected). VLM-verified.
+- Activity tab → stats summary (top-4 kinds with bars) + search input + export button → type "sync" → 8/37 events. Screenshot verified.
+- Sync tab → auto-sync banner → toggle ON → "paused (offline)" → toggle topbar online → "running · every 30s". VLM-verified.
+- Lint clean (eslint . → 0 errors). Both services stable (edge-engine :3030, next :3000 HTTP 200).
+
+Stage Summary:
+- 3 new features (Activity search/export/stats, Sync auto-sync, Demo Walkthrough) added.
+- The app now guides judges through the golden path (Demo Walkthrough), keeps the activity log searchable + exportable, and can auto-sync on an interval — all reinforcing the "edge intelligence platform" story.
+- No unresolved issues; project remains stable and lint-clean across 7 tabs.

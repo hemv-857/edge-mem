@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Activity, Radio, Inbox } from "lucide-react";
+import { Activity, Radio, Inbox, Search as SearchIcon, X, Download, BarChart3 } from "lucide-react";
 import type { EdgeHook } from "@/hooks/use-edge";
 import type { ActivityEntry } from "@/lib/edge-types";
 import { cn } from "@/lib/utils";
+import { toast } from "@/hooks/use-toast";
 import { Panel, formatTime } from "./edge-ui";
 
 type KindFilter =
@@ -50,12 +51,19 @@ function metaValue(v: unknown): string | null {
 
 export default function ActivityLog({ edge }: { edge: EdgeHook }) {
   const [filter, setFilter] = useState<KindFilter>("all");
+  const [textFilter, setTextFilter] = useState("");
   const activity = edge.activity;
 
   const visible = useMemo(() => {
-    if (filter === "all") return activity;
-    return activity.filter((e) => e.kind === filter);
-  }, [activity, filter]);
+    let v = filter === "all" ? activity : activity.filter((e) => e.kind === filter);
+    if (textFilter.trim()) {
+      const q = textFilter.trim().toLowerCase();
+      v = v.filter((e) =>
+        `${e.message} ${e.kind} ${e.device} ${JSON.stringify(e.meta ?? {})}`.toLowerCase().includes(q)
+      );
+    }
+    return v;
+  }, [activity, filter, textFilter]);
 
   // counts per kind for chip badges
   const counts = useMemo(() => {
@@ -64,24 +72,76 @@ export default function ActivityLog({ edge }: { edge: EdgeHook }) {
     return m;
   }, [activity]);
 
+  // top 4 kinds for stats summary
+  const topKinds = useMemo(() => {
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  }, [counts]);
+
+  function exportLog() {
+    const lines = visible.map((e) =>
+      `${new Date(e.ts).toISOString()}\t${e.device}\t${e.kind}\t${e.message}\t${JSON.stringify(e.meta ?? {})}`
+    ).join("\n");
+    const blob = new Blob([`timestamp\tdevice\tkind\tmessage\tmeta\n${lines}`], { type: "text/tab-separated-values" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `edge-activity-${Date.now()}.tsv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast({ title: "Exported", description: `${visible.length} events as TSV` });
+  }
+
   return (
     <Panel
       title="Activity Log"
       desc="Append-only edge event stream — writes, connectivity, policy decisions, sync, conflicts"
       right={
-        <div className="flex items-center gap-2 rounded-md border border-border bg-card/50 px-2.5 py-1">
-          <Radio className={cn(
-            "h-3.5 w-3.5",
-            edge.loading ? "text-amber-400 edge-pulse" : "text-emerald-400",
-          )} />
-          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            {activity.length} events
-          </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={exportLog}
+            disabled={visible.length === 0}
+            title="Export visible events as TSV"
+            className="flex items-center gap-1 rounded-md border border-border bg-card/50 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+          >
+            <Download className="h-3 w-3" /> export
+          </button>
+          <div className="flex items-center gap-2 rounded-md border border-border bg-card/50 px-2.5 py-1">
+            <Radio className={cn(
+              "h-3.5 w-3.5",
+              edge.loading ? "text-amber-400 edge-pulse" : "text-emerald-400",
+            )} />
+            <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {visible.length}{textFilter || filter !== "all" ? `/${activity.length}` : ""} events
+            </span>
+          </div>
         </div>
       }
     >
+      {/* stats summary */}
+      {topKinds.length > 0 && (
+        <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {topKinds.map(([kind, count]) => {
+            const s = styleFor(kind);
+            const pct = activity.length > 0 ? Math.round((count / activity.length) * 100) : 0;
+            return (
+              <div key={kind} className="rounded-md border border-border bg-background/30 px-2 py-1.5">
+                <div className="flex items-center justify-between">
+                  <span className={cn("flex items-center gap-1 font-mono text-[9px] uppercase tracking-wider", s.badge.split(" ")[0])}>
+                    <span className={cn("h-1.5 w-1.5 rounded-full", s.dot)} />{s.label}
+                  </span>
+                  <span className="font-mono text-sm font-semibold tabular-nums text-foreground">{count}</span>
+                </div>
+                <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted">
+                  <div className={cn("h-full rounded-full", s.dot)} style={{ width: `${Math.max(pct, 2)}%` }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* filter row */}
-      <div className="mb-4 flex flex-wrap items-center gap-1.5">
+      <div className="mb-3 flex flex-wrap items-center gap-1.5">
         {KIND_FILTERS.map((k) => {
           const active = filter === k;
           const count = k === "all" ? activity.length : counts[k] ?? 0;
@@ -111,13 +171,29 @@ export default function ActivityLog({ edge }: { edge: EdgeHook }) {
         })}
       </div>
 
+      {/* text search */}
+      <div className="relative mb-3">
+        <SearchIcon className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+        <input
+          value={textFilter}
+          onChange={(e) => setTextFilter(e.target.value)}
+          placeholder="search events by message, kind, device, meta…"
+          className="h-8 w-full rounded-md border border-border bg-background/50 pl-8 pr-7 font-mono text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-emerald-500/40 focus:outline-none"
+        />
+        {textFilter && (
+          <button onClick={() => setTextFilter("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+            <X className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+
       {/* timeline */}
       {visible.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
           <Inbox className="h-6 w-6 text-muted-foreground/40" />
-          <p className="font-mono text-xs text-muted-foreground">Awaiting activity…</p>
+          <p className="font-mono text-xs text-muted-foreground">{activity.length === 0 ? "Awaiting activity…" : "No events match the filter."}</p>
           <p className="text-[10px] text-muted-foreground/70">
-            events from device-alpha will stream here in real time
+            {activity.length === 0 ? "events from device-alpha will stream here in real time" : "try clearing the search or filter"}
           </p>
         </div>
       ) : (

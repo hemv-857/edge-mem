@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { RefreshCw, DownloadCloud, ArrowUp, ArrowDown, AlertTriangle, Check, GitMerge, FileText, Network, Zap, HardDrive, History, Cloud, Cpu } from "lucide-react";
+import { RefreshCw, DownloadCloud, ArrowUp, ArrowDown, AlertTriangle, Check, GitMerge, FileText, Network, Zap, HardDrive, History, Cloud, Cpu, Timer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "@/hooks/use-toast";
 import type { EdgeHook } from "@/hooks/use-edge";
 import type { Conflict, ActivityEntry } from "@/lib/edge-types";
@@ -15,6 +16,26 @@ export default function SyncConsole({ edge }: { edge: EdgeHook }) {
   const online = ss?.online ?? true;
   const summary = ss?.last_sync_summary;
 
+  // Auto-sync state
+  const [autoSync, setAutoSync] = useState(false);
+  const [intervalSec, setIntervalSec] = useState(30);
+  const lastAutoSyncRef = useRef<number>(0);
+
+  // Auto-sync effect: when enabled + online + queue has items, sync on interval
+  useEffect(() => {
+    if (!autoSync) return;
+    const id = setInterval(async () => {
+      const now = Date.now();
+      const queueDepth = edge.syncStatus?.queue_depth ?? 0;
+      const isOnline = edge.syncStatus?.online ?? false;
+      if (isOnline && !edge.busy && (queueDepth > 0 || now - lastAutoSyncRef.current >= intervalSec * 1000)) {
+        lastAutoSyncRef.current = now;
+        try { await edge.sync(); } catch { /* best-effort */ }
+      }
+    }, 2000); // check every 2s
+    return () => clearInterval(id);
+  }, [autoSync, intervalSec, edge]);
+
   return (
     <div className="space-y-5">
       {/* top stats */}
@@ -23,6 +44,41 @@ export default function SyncConsole({ edge }: { edge: EdgeHook }) {
         <StatCard label="Last sync" value={formatRelative(ss?.last_sync_at)} sub={summary ? `${summary.pushed}↑ ${summary.pulled}↓` : "never"} icon={<RefreshCw className="h-4 w-4" />} />
         <StatCard label="Pushed (total)" value={formatBytes(ss?.bytes_pushed ?? 0)} sub="edge → cloud" accent="emerald" icon={<ArrowUp className="h-4 w-4" />} />
         <StatCard label="Pulled (total)" value={formatBytes(ss?.bytes_pulled ?? 0)} sub="cloud → edge" icon={<ArrowDown className="h-4 w-4" />} />
+      </div>
+
+      {/* auto-sync banner */}
+      <div className={cn(
+        "flex items-center gap-3 rounded-lg border p-3 transition-colors",
+        autoSync ? "border-emerald-500/30 bg-emerald-500/5" : "border-border bg-card/40"
+      )}>
+        <Timer className={cn("h-4 w-4", autoSync ? "text-emerald-400 edge-pulse" : "text-muted-foreground")} />
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs font-semibold text-foreground">auto-sync</span>
+            <span className="font-mono text-[10px] text-muted-foreground">
+              {autoSync ? (online ? `running · every ${intervalSec}s` : "paused (offline)") : "off"}
+            </span>
+          </div>
+          <p className="text-[10px] text-muted-foreground">automatically flushes the queue + pulls cloud updates when online</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            value={intervalSec}
+            onChange={(e) => setIntervalSec(Number(e.target.value))}
+            disabled={!autoSync}
+            className="h-7 rounded border border-border bg-card/50 px-1.5 font-mono text-[10px] text-foreground disabled:opacity-50"
+          >
+            <option value={15}>15s</option>
+            <option value={30}>30s</option>
+            <option value={60}>60s</option>
+            <option value={120}>2m</option>
+          </select>
+          <Switch
+            checked={autoSync}
+            onCheckedChange={setAutoSync}
+            className="data-[state=checked]:bg-emerald-500"
+          />
+        </div>
       </div>
 
       <div className="grid gap-5 lg:grid-cols-2">

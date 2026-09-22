@@ -341,7 +341,38 @@ function SimulatePanel({ policy }: { policy: Policy | null }) {
       {/* result */}
       {result && (
         <div className="mt-3 space-y-2">
-          {/* decision */}
+          {/* decision-flow diagram: tags → rules → decision */}
+          <div className="flex items-center gap-2 rounded-md border border-border bg-background/30 p-2.5">
+            {/* tags */}
+            <div className="flex flex-col gap-0.5">
+              <span className="font-mono text-[8px] uppercase tracking-wider text-muted-foreground/70">tags</span>
+              <div className="flex flex-col gap-0.5">
+                <TagChip label={`domain=${domain}`} />
+                <TagChip label={`crit=${criticality}`} />
+                <TagChip label={`sens=${sensitivity}`} />
+              </div>
+            </div>
+            {/* arrow */}
+            <div className="flex flex-1 items-center justify-center">
+              <div className="flex items-center gap-1">
+                <div className="h-px w-8 bg-border" />
+                <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                <span className="font-mono text-[8px] uppercase tracking-wider text-muted-foreground/70">{result.trace.length} rules</span>
+                <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                <div className="h-px w-8 bg-border" />
+              </div>
+            </div>
+            {/* decision */}
+            <div className="flex flex-col items-center gap-0.5">
+              <span className="font-mono text-[8px] uppercase tracking-wider text-muted-foreground/70">decision</span>
+              <SyncStateBadge value={result.decision.sync_state} />
+              {result.decision.matched_rule && (
+                <span className="font-mono text-[9px] text-muted-foreground">← {result.decision.matched_rule}</span>
+              )}
+            </div>
+          </div>
+
+          {/* decision detail */}
           <div className={cn(
             "flex items-center gap-2 rounded-md border p-2.5",
             result.decision.sync_state === "sync_now" ? "border-rose-500/30 bg-rose-500/5"
@@ -377,6 +408,12 @@ function SimulatePanel({ policy }: { policy: Policy | null }) {
         </div>
       )}
     </div>
+  );
+}
+
+function TagChip({ label }: { label: string }) {
+  return (
+    <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{label}</span>
   );
 }
 

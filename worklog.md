@@ -287,3 +287,27 @@ Stage Summary:
 - 3 improvements (conflict diff highlighting + 3-way merge, footer keyboard hints, label/contrast fixes).
 - The conflict resolution UX is now much stronger: judges see exactly what changed between local and remote (word-level diff with +/- counts), and the footer reinforces the ⌘K command palette discoverability.
 - No unresolved issues; project remains stable and lint-clean across 7 tabs. The app is demo-ready with: command palette, fleet learning hero, guided walkthrough, auto-sync, searchable/exportable activity log, policy simulation, mode comparison, system health, similar-points, point drawer, template-assisted writes, diff-highlighted conflict resolution, and full mobile responsiveness.
+
+---
+Task ID: cron-review-8
+Agent: main (cron webDevReview round 8)
+Task: QA via VLM (metrics + policy simulate), add metrics export + event bar improvements + policy decision-flow diagram.
+
+Work Log:
+- Reviewed worklog.md — project had 7 tabs, feature-complete after cron-review-7 (conflict diff highlighting, footer keyboard hints, label/contrast fixes). Cloud at 13 points, edge-engine uptime 2534s.
+- Fresh QA: ran the full golden path end-to-end (bootstrap → offline → search → online → sync) with no runtime errors. Screenshotted Metrics + Policy simulate panels, ran VLM (z-ai vision) on both. VLM flagged: event-breakdown bars too faint for low counts; no metrics export; policy simulate lacks a visual decision-flow; latency chart axis ambiguous.
+
+NEW FEATURES + STYLING FIXES (browser-verified + VLM-verified):
+1. Metrics — event-breakdown improvements + export (MetricsPanel.tsx): increased bar height from h-1.5 to h-2 for better visibility; increased minimum bar width from 2% to 4% so low-count events are visible; added percentage labels next to counts (e.g. "28 28%"); added an "export" button to the Event Breakdown panel header that downloads the kind/count breakdown as a TSV. Added the Download icon import. VLM-verified: "export button in top-right, event bars visible with percentage labels (28%, 26%, 26%, 9%, 3%)".
+2. Policy Simulate — decision-flow diagram (PolicyEngine.tsx): added a visual "tags → rules → decision" flow diagram above the decision detail when a simulation has been run. Shows: tags (domain=X, crit=X, sens=X as chips) on the left, a horizontal arrow with "N rules" in the middle, and the decision badge + matched rule ID on the right. Makes the policy routing logic immediately scannable. Added a TagChip helper component. DOM-verified: "decision-flow in DOM ✓ — sync_state: SYNC-NOW" (critical-incident preset matched r3).
+
+VERIFICATION (agent-browser through gateway):
+- Full golden path: bootstrap → offline → search → online → sync — no console/runtime errors.
+- Metrics tab → event breakdown shows "export" button ✓ + bars with percentage labels ✓. VLM-verified.
+- Policy tab → simulate → critical-incident preset → decision-flow diagram renders (tags → rules → decision) with SYNC-NOW badge + matched rule r3. DOM-verified.
+- Lint clean (eslint . → 0 errors). Both services stable (edge-engine :3030, next :3000 HTTP 200, cloud=13).
+
+Stage Summary:
+- 2 features (metrics export + bar improvements, policy decision-flow diagram).
+- The Metrics tab now exports its event breakdown as TSV, and the Policy simulate panel shows a visual tags→rules→decision flow that makes the routing logic scannable at a glance.
+- No unresolved issues; project remains stable and lint-clean across 7 tabs. The app is demo-ready with: command palette, fleet learning hero, guided walkthrough, auto-sync, searchable/exportable activity log, policy simulation + decision-flow, mode comparison, system health, similar-points, point drawer, template-assisted writes, diff-highlighted conflict resolution, metrics export, and full mobile responsiveness.

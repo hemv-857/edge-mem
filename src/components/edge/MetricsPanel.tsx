@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils";
 import {
   LineChart, Zap, Activity as ActivityIcon, Search, Database,
-  RefreshCw, Cloud, TrendingUp, Clock, Cpu, ArrowUpRight, ArrowDownRight, Gauge,
+  RefreshCw, Cloud, TrendingUp, Clock, Cpu, ArrowUpRight, ArrowDownRight, Gauge, Download,
 } from "lucide-react";
 import type { EdgeHook } from "@/hooks/use-edge";
 import type { ActivityEntry } from "@/lib/edge-types";
@@ -85,7 +85,21 @@ export default function MetricsPanel({ edge }: { edge: EdgeHook }) {
         </Panel>
 
         {/* event kind breakdown */}
-        <Panel title="Event Breakdown" desc="Action distribution across the fleet">
+        <Panel title="Event Breakdown" desc="Action distribution across the fleet" right={
+          <button
+            onClick={() => {
+              const lines = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}\t${v}`).join("\n");
+              const blob = new Blob([`kind\tcount\n${lines}\ntotal\t${totalEvents}`], { type: "text/tab-separated-values" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a"); a.href = url; a.download = `edge-metrics-${Date.now()}.tsv`; a.click();
+              URL.revokeObjectURL(url);
+            }}
+            disabled={totalEvents === 0}
+            className="flex items-center gap-1 rounded-md border border-border bg-card/50 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+          >
+            <Download className="h-3 w-3" /> export
+          </button>
+        }>
           <div className="space-y-2">
             {Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([kind, count]) => {
               const pct = totalEvents > 0 ? Math.round((count / totalEvents) * 100) : 0;
@@ -94,10 +108,10 @@ export default function MetricsPanel({ edge }: { edge: EdgeHook }) {
                 <div key={kind}>
                   <div className="flex items-center justify-between font-mono text-[11px]">
                     <span className="uppercase tracking-wider text-muted-foreground">{kind}</span>
-                    <span className="tabular-nums text-foreground">{count}</span>
+                    <span className="flex items-center gap-1.5 tabular-nums text-foreground">{count}<span className="text-[9px] text-muted-foreground/60">{pct}%</span></span>
                   </div>
-                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
-                    <div className={cn("h-full rounded-full", color)} style={{ width: `${Math.max(pct, 2)}%` }} />
+                  <div className="mt-1 h-2 overflow-hidden rounded-full bg-muted">
+                    <div className={cn("h-full rounded-full transition-all", color)} style={{ width: `${Math.max(pct, 4)}%` }} />
                   </div>
                 </div>
               );

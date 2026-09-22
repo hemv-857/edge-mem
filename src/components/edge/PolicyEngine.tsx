@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Shield, Save, Route, Info, Clock, ListOrdered, Loader2, RotateCcw,
+  FlaskConical, Play, Check, X, ArrowRight,
 } from "lucide-react";
 import type { EdgeHook } from "@/hooks/use-edge";
 import type { Policy, PolicyRule } from "@/lib/edge-types";
@@ -242,9 +243,160 @@ export default function PolicyEngine({ edge }: { edge: EdgeHook }) {
               expiry · edits apply to the next write
             </span>
           </div>
+
+          {/* simulate panel */}
+          <SimulatePanel policy={policy} />
         </div>
       )}
     </Panel>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* simulate panel — test a point against the rules without writing              */
+/* -------------------------------------------------------------------------- */
+
+interface SimTrace {
+  id: string;
+  field: string;
+  op: string;
+  value?: string;
+  values?: string[];
+  point_value: string;
+  matched: boolean;
+  action: string;
+  reason: string;
+  is_match: boolean;
+}
+
+function SimulatePanel({ policy }: { policy: Policy | null }) {
+  const [domain, setDomain] = useState("incident");
+  const [criticality, setCriticality] = useState("high");
+  const [sensitivity, setSensitivity] = useState("internal");
+  const [result, setResult] = useState<{ decision: { sync_state: string; matched_rule: string | null; reason: string }; trace: SimTrace[] } | null>(null);
+  const [running, setRunning] = useState(false);
+
+  async function run() {
+    if (!policy) return;
+    setRunning(true);
+    try {
+      const r = await edgeApi.simulatePolicy({ text: "(simulated — no write)", criticality, sensitivity, domain });
+      setResult(r);
+    } catch (e) {
+      toast({ title: "Simulate failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  // quick presets
+  const presets = [
+    { label: "critical incident", domain: "incident", criticality: "critical", sensitivity: "internal" },
+    { label: "restricted sensor", domain: "sensor", criticality: "medium", sensitivity: "restricted" },
+    { label: "routine manual", domain: "manual", criticality: "low", sensitivity: "internal" },
+  ];
+
+  return (
+    <div className="rounded-lg border border-sky-500/20 bg-sky-500/[0.03] p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <FlaskConical className="h-3.5 w-3.5 text-sky-300" />
+          <h3 className="font-mono text-xs font-semibold uppercase tracking-wider text-foreground">
+            simulate
+          </h3>
+          <span className="font-mono text-[10px] text-muted-foreground">— test tags against rules (no write)</span>
+        </div>
+      </div>
+
+      {/* tag selectors */}
+      <div className="grid grid-cols-3 gap-2">
+        <TagSelect label="domain" value={domain} onChange={setDomain} options={["manual", "incident", "sensor"]} />
+        <TagSelect label="criticality" value={criticality} onChange={setCriticality} options={["low", "medium", "high", "critical"]} />
+        <TagSelect label="sensitivity" value={sensitivity} onChange={setSensitivity} options={["internal", "restricted", "public"]} />
+      </div>
+
+      {/* presets */}
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {presets.map((p) => (
+          <button
+            key={p.label}
+            onClick={() => { setDomain(p.domain); setCriticality(p.criticality); setSensitivity(p.sensitivity); }}
+            className="rounded-full border border-border bg-card/40 px-2 py-0.5 font-mono text-[9px] text-muted-foreground transition-colors hover:border-sky-500/30 hover:text-sky-300"
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      <Button
+        size="sm"
+        onClick={run}
+        disabled={running || !policy}
+        className="mt-3 gap-1.5 bg-sky-500/80 font-mono text-xs text-sky-950 hover:bg-sky-400"
+      >
+        {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+        simulate
+      </Button>
+
+      {/* result */}
+      {result && (
+        <div className="mt-3 space-y-2">
+          {/* decision */}
+          <div className={cn(
+            "flex items-center gap-2 rounded-md border p-2.5",
+            result.decision.sync_state === "sync_now" ? "border-rose-500/30 bg-rose-500/5"
+              : result.decision.sync_state === "local_only" ? "border-amber-500/30 bg-amber-500/5"
+              : "border-emerald-500/30 bg-emerald-500/5"
+          )}>
+            <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">decision</span>
+            <SyncStateBadge value={result.decision.sync_state} />
+            <span className="ml-auto text-[11px] text-muted-foreground">{result.decision.reason}</span>
+          </div>
+
+          {/* trace */}
+          <div className="space-y-1">
+            {result.trace.map((t, i) => (
+              <div
+                key={t.id}
+                className={cn(
+                  "flex items-center gap-2 rounded border px-2 py-1.5 font-mono text-[10px]",
+                  t.is_match ? "border-emerald-500/30 bg-emerald-500/5"
+                    : t.matched ? "border-amber-500/20 bg-amber-500/5"
+                    : "border-border bg-muted/20"
+                )}
+              >
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-muted text-[9px] tabular-nums text-muted-foreground">{i + 1}</span>
+                {t.is_match ? <Check className="h-3 w-3 text-emerald-400" /> : t.matched ? <Check className="h-3 w-3 text-amber-400" /> : <X className="h-3 w-3 text-muted-foreground/40" />}
+                <span className="text-foreground/80">{t.field} {t.op} {t.op === "in" ? (t.values ?? []).join(", ") : t.value}</span>
+                <span className="text-muted-foreground/60">· point: {t.point_value}</span>
+                <span className="ml-auto text-muted-foreground">{t.action}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TagSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: string[] }) {
+  return (
+    <div>
+      <div className="mb-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="flex gap-0.5">
+        {options.map((o) => (
+          <button
+            key={o}
+            onClick={() => onChange(o)}
+            className={cn(
+              "flex-1 rounded border px-1 py-1 font-mono text-[10px] transition-colors",
+              value === o ? "border-sky-500/40 bg-sky-500/10 text-sky-300" : "border-border bg-card/40 text-muted-foreground hover:text-foreground"
+            )}
+          >{o.slice(0, 4)}</button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -260,7 +412,7 @@ function RuleRow({
   onActionChange: (a: PolicyRule["action"]) => void;
 }) {
   const valueText = rule.op === "in"
-    ? (rule.values ?? []).join(" | ")
+    ? (rule.values ?? []).join(", ")
     : (rule.value ?? "—");
 
   return (

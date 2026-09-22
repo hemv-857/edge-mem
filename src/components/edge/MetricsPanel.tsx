@@ -170,11 +170,11 @@ export default function MetricsPanel({ edge }: { edge: EdgeHook }) {
                 <div className="mt-2 grid grid-cols-3 gap-2 font-mono text-[10px]">
                   <div>
                     <div className="text-muted-foreground">pushed</div>
-                    <div className="text-emerald-400">{ss.last_sync_summary.pushed}</div>
+                    <div className="text-emerald-400">{ss.last_sync_summary.pushed}{ss.last_sync_summary.pushed === 0 && <span className="ml-1 text-muted-foreground/50">(nothing new)</span>}</div>
                   </div>
                   <div>
                     <div className="text-muted-foreground">pulled</div>
-                    <div className="text-sky-400">{ss.last_sync_summary.pulled}</div>
+                    <div className="text-sky-400">{ss.last_sync_summary.pulled}{ss.last_sync_summary.pulled === 0 && <span className="ml-1 text-muted-foreground/50">(up to date)</span>}</div>
                   </div>
                   <div>
                     <div className="text-muted-foreground">conflicts</div>
@@ -184,6 +184,11 @@ export default function MetricsPanel({ edge }: { edge: EdgeHook }) {
               )}
             </div>
           </div>
+        </Panel>
+
+        {/* system health score */}
+        <Panel title="System Health" desc="Aggregate edge intelligence score">
+          <SystemHealth ss={ss} memory={memory} searchSamples={searchSamples} />
         </Panel>
       </div>
 
@@ -225,6 +230,64 @@ interface SearchSample {
   shard: string;
   mode: string;
   hits: number;
+}
+
+function SystemHealth({ ss, memory, searchSamples }: { ss: import("@/lib/edge-types").SyncStatus | null; memory: import("@/lib/edge-types").MemoryStats | null; searchSamples: SearchSample[] }) {
+  // Compute a 0-100 health score from 4 signals:
+  //  - memory populated (has points) — 25
+  //  - low avg latency (<80ms) — 25 (scaled)
+  //  - no open conflicts — 25 (scaled by count)
+  //  - synced recently (<5min) OR never needed — 25
+  const totalPoints = memory?.total_points ?? 0;
+  const memScore = Math.min(25, totalPoints > 0 ? 25 : 0);
+  const avgLat = searchSamples.length ? searchSamples.reduce((a, s) => a + s.latencyMs, 0) / searchSamples.length : 0;
+  const latScore = searchSamples.length === 0 ? 15 : Math.max(0, 25 - Math.max(0, (avgLat - 20) / 2));
+  const openConflicts = ss?.open_conflicts.length ?? 0;
+  const confScore = Math.max(0, 25 - openConflicts * 8);
+  const lastSync = ss?.last_sync_at;
+  const syncAgeMs = lastSync ? Date.now() - lastSync : null;
+  const syncScore = syncAgeMs === null ? 15 : syncAgeMs < 5 * 60 * 1000 ? 25 : syncAgeMs < 30 * 60 * 1000 ? 15 : 5;
+  const total = Math.round(memScore + latScore + confScore + syncScore);
+  const grade = total >= 85 ? "A" : total >= 70 ? "B" : total >= 50 ? "C" : "D";
+  const gradeColor = total >= 85 ? "text-emerald-400" : total >= 70 ? "text-sky-300" : total >= 50 ? "text-amber-300" : "text-rose-400";
+
+  const signals = [
+    { label: "memory", value: memScore, max: 25, color: "bg-emerald-400", note: totalPoints > 0 ? `${totalPoints} pts` : "empty" },
+    { label: "latency", value: latScore, max: 25, color: "bg-sky-400", note: avgLat > 0 ? `${avgLat.toFixed(0)}ms avg` : "no data" },
+    { label: "conflicts", value: confScore, max: 25, color: "bg-rose-400", note: `${openConflicts} open` },
+    { label: "sync freshness", value: syncScore, max: 25, color: "bg-amber-400", note: syncAgeMs === null ? "n/a" : syncAgeMs < 60000 ? "just now" : `${Math.floor(syncAgeMs / 60000)}m ago` },
+  ];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-4">
+        <div className="relative flex h-20 w-20 shrink-0 items-center justify-center">
+          <svg viewBox="0 0 40 40" className="absolute inset-0 -rotate-90">
+            <circle cx="20" cy="20" r="16" fill="none" stroke="currentColor" strokeWidth="3" className="text-muted/30" />
+            <circle cx="20" cy="20" r="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"
+              className={total >= 85 ? "text-emerald-400" : total >= 70 ? "text-sky-400" : total >= 50 ? "text-amber-400" : "text-rose-400"}
+              strokeDasharray={`${(total / 100) * 100.5} 100.5`}
+            />
+          </svg>
+          <div className="text-center">
+            <div className={cn("font-mono text-xl font-bold tabular-nums", gradeColor)}>{total}</div>
+            <div className={cn("font-mono text-[9px] uppercase", gradeColor)}>{grade}</div>
+          </div>
+        </div>
+        <div className="flex-1 space-y-1.5">
+          {signals.map((s) => (
+            <div key={s.label} className="flex items-center gap-2">
+              <span className="w-24 shrink-0 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{s.label}</span>
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                <div className={cn("h-full rounded-full", s.color)} style={{ width: `${(s.value / s.max) * 100}%` }} />
+              </div>
+              <span className="w-20 shrink-0 text-right font-mono text-[9px] text-muted-foreground">{s.note}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function extractSearchLatency(activity: ActivityEntry[]): SearchSample[] {

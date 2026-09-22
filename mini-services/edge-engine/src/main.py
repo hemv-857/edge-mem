@@ -158,6 +158,35 @@ def h_put_policy(body, qs):
     fleet.log("system", "policy", "Policy rules updated", {})
     return 200, fleet.policy
 
+def h_simulate_policy(body, qs):
+    """Simulate a point's tags against the policy rules — returns the matched
+    rule + resulting sync_state, WITHOUT writing anything. Used by the Policy
+    Engine's 'Simulate' panel."""
+    from engine import evaluate_policy
+    text = body.get("text", "")
+    criticality = body.get("criticality", "medium")
+    sensitivity = body.get("sensitivity", "internal")
+    domain = body.get("domain", "incident")
+    meta = {"criticality": criticality, "sensitivity": sensitivity, "domain": domain}
+    decision = evaluate_policy(meta, fleet.policy)
+    # also return which rules were evaluated (and which matched/skipped) for the UI
+    trace = []
+    for rule in fleet.policy["rules"]:
+        field = rule["field"]
+        val = meta.get(field)
+        if rule["op"] == "eq":
+            matched = val == rule.get("value")
+        else:  # in
+            matched = val in (rule.get("values", []) or [])
+        trace.append({
+            "id": rule["id"], "field": field, "op": rule["op"],
+            "value": rule.get("value"), "values": rule.get("values"),
+            "point_value": val, "matched": matched,
+            "action": rule["action"], "reason": rule["reason"],
+            "is_match": rule["id"] == decision["matched_rule"],
+        })
+    return 200, {"decision": decision, "trace": trace, "point_meta": meta}
+
 def h_active(body, qs):
     dev = body.get("device")
     if dev not in fleet.devices:
@@ -187,6 +216,7 @@ ROUTES: Dict[tuple, Callable] = {
     ("GET",  "/api/edge/activity"):         h_activity,
     ("GET",  "/api/edge/policy"):           h_get_policy,
     ("PUT",  "/api/edge/policy"):           h_put_policy,
+    ("POST", "/api/edge/policy/simulate"):  h_simulate_policy,
     ("POST", "/api/edge/active"):           h_active,
 }
 

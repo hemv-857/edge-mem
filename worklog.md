@@ -153,3 +153,37 @@ Stage Summary:
 - The app now has 7 tabs (Overview/Memory/Search/Sync/Metrics/Activity/Policy) and supports a richer inspection workflow: filter points → inspect → find similar → distill → save. The Metrics tab makes the on-device retrieval performance (sub-60ms hybrid search) and fleet activity distribution visible to judges.
 - No bugs found this round; project remains stable and lint-clean.
 - Known non-issue: the VLM consistently reports a "floating N badge" but DOM inspection confirms no such element exists — it's a vision-model artifact on the dark theme.
+
+---
+Task ID: cron-review-3
+Agent: main (cron webDevReview round 3)
+Task: QA via VLM, add Policy Simulate + Search Compare modes + System Health score, styling polish.
+
+Work Log:
+- Reviewed worklog.md — project had 7 tabs, was feature-complete and lint-clean after cron-review-2 (Memory filter, Similar Points, Metrics dashboard).
+- Fresh QA: opened app via gateway, screenshotted all 7 tabs, ran VLM (z-ai vision) on Search, Metrics, and Policy tabs. VLM flagged: search results text wrapping awkward on long words; no way to compare retrieval modes; policy rules used ambiguous `|` separator for IN lists; metrics lacked a summary health score; zero-byte sync was confusing.
+
+NEW FEATURES (all browser-verified + VLM-verified):
+1. Policy Simulate panel (PolicyEngine.tsx + backend POST /api/edge/policy/simulate): a new panel at the bottom of the Policy tab. Lets you pick domain/criticality/sensitivity tags via button-group selectors (with 3 quick presets: "critical incident", "restricted sensor", "routine manual"), then "simulate" runs the tags against the current policy rules WITHOUT writing anything. Shows the decision (SYNC-NOW/QUEUED/LOCAL-ONLY with reason) + a full rule trace: each rule shows its condition, the point's value, whether it matched, and the resulting action. The matched rule (the first that fires) is highlighted emerald; rules that would match but were skipped (not first) are amber; non-matches are muted. Verified: critical+incident → SYNC-NOW (rule r3 matches, trace shows rule 1 skipped because sensitivity=internal not restricted).
+
+2. Search Compare modes (SearchPlayground.tsx): a new "Compare" button next to Search that runs the query in ALL three modes (dense/sparse/hybrid) via Promise.all, then shows a 3-column side-by-side panel. Each column shows the mode badge (hybrid highlighted emerald with "· RRF"), latency badge, top-3 results with score bars, and hit count + latency footer. This makes RRF fusion's value concrete: dense finds 5 semantic matches, sparse finds 2 keyword matches, hybrid surfaces all 5 with balanced scores. VLM-verified: "all 3 columns visible, hybrid highlighted, clean layout".
+
+3. System Health score (MetricsPanel.tsx): a new "System Health" panel on the Metrics tab with a circular SVG gauge (0-100 score + letter grade A/B/C/D) computed from 4 signals: memory populated (25pts), avg search latency (25pts, scaled), open conflicts (25pts, -8 each), sync freshness (25pts if <5min). Each signal has a colored progress bar + note (e.g. "12 pts", "37ms avg", "0 open", "1m ago"). VLM-verified: "gauge visible with score 92/A, progress bars readable".
+
+BUG FIXES:
+- Search result text: added `break-words` to the result paragraph so long words/URLs wrap instead of overflowing.
+- Policy IN display: changed `" | "` separator to `", "` for IN-list values (e.g. "manual, incident" instead of "manual | incident") — less ambiguous.
+- Sync Throughput: clarified zero-byte sync by annotating pushed=0 with "(nothing new)" and pulled=0 with "(up to date)" so a 0-byte sync isn't confusing.
+
+BACKEND: added POST /api/edge/policy/simulate endpoint (engine.evaluate_policy + a rule-trace builder) + registered in ROUTES. edge-api.ts: added simulatePolicy() client method.
+
+VERIFICATION (agent-browser through gateway):
+- Policy tab → Simulate panel → "critical incident" preset → simulate → decision SYNC-NOW + full 5-rule trace with matched rule highlighted. Backend tested: critical+incident → sync_now (r3).
+- Search tab → type "bearing vibration pump" → Compare → 3-column panel: dense 5 hits/15.3ms, sparse 2 hits/30.9ms, hybrid 5 hits/17.2ms. VLM-verified.
+- Metrics tab → System Health shows 92/A with gauge + 4 signal bars. VLM-verified.
+- Lint clean (eslint . → 0 errors). Both services stable.
+
+Stage Summary:
+- 3 new features (Policy Simulate, Search Compare modes, System Health score) + 3 bug fixes (text wrapping, IN display, zero-byte sync clarity).
+- The Policy Engine now demonstrates its routing logic interactively (simulate before write), the Search Playground proves RRF's value (compare modes), and the Metrics tab has an at-a-glance health score for judges.
+- No unresolved issues; project remains stable and lint-clean across 7 tabs.

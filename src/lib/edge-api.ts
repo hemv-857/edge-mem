@@ -85,6 +85,8 @@ export const edge = {
     edgeGet<{ entries: ActivityEntry[] }>("activity", { device: device ?? "", limit, since }),
   getPolicy: () => edgeGet<Policy>("policy"),
   putPolicy: (policy: Policy) => edgePut<Policy>("policy", policy),
+  simulatePolicy: (p: { text: string; criticality: string; sensitivity: string; domain: string }) =>
+    edgePost<{ decision: { sync_state: string; matched_rule: string | null; reason: string }; trace: Array<{ id: string; field: string; op: string; value?: string; values?: string[]; point_value: string; matched: boolean; action: string; reason: string; is_match: boolean }>; point_meta: Record<string, string> }>("policy/simulate", p),
   setActive: (device: string) => edgePost<{ active_device: string }>("active", { device }),
 };
 

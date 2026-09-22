@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { Search, Zap, Wifi, WifiOff, Sparkles, Quote, Cloud, Save, Loader2 } from "lucide-react";
+import { Search, Zap, Wifi, WifiOff, Sparkles, Quote, Cloud, Save, Loader2, GitCompare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -36,6 +36,8 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
   const [running, setRunning] = useState(false);
   const [distillId, setDistillId] = useState<string | null>(null);
   const [distilled, setDistilled] = useState<Record<string, { sop: string; saving: boolean }>>({});
+  const [compare, setCompare] = useState<Record<string, SearchResponse> | null>(null);
+  const [comparing, setComparing] = useState(false);
   const online = edge.syncStatus?.online ?? true;
 
   async function run(q?: string) {
@@ -46,6 +48,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
     }
     if (q) setQuery(q);
     setRunning(true);
+    setCompare(null);
     try {
       const r = await edge.search(text, shard, mode, limit);
       setRes(r);
@@ -53,6 +56,33 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
       toast({ title: "Search failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
     } finally {
       setRunning(false);
+    }
+  }
+
+  // Compare modes: run dense/sparse/hybrid side-by-side to show RRF's value
+  async function runCompare() {
+    const text = query.trim();
+    if (!text) {
+      toast({ title: "Enter a query", description: "Type a search query first.", variant: "destructive" });
+      return;
+    }
+    setComparing(true);
+    setCompare(null);
+    try {
+      const modes: SearchMode[] = ["dense", "sparse", "hybrid"];
+      const results = await Promise.all(
+        modes.map(async (m) => {
+          try {
+            const r = await edge.search(text, shard, m, limit);
+            return [m, r] as const;
+          } catch { return [m, null] as const; }
+        })
+      );
+      const map: Record<string, SearchResponse> = {};
+      for (const [m, r] of results) if (r) map[m] = r;
+      setCompare(map);
+    } finally {
+      setComparing(false);
     }
   }
 
@@ -123,14 +153,26 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
               onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) run(); }}
             />
           </div>
-          <Button
-            onClick={() => run()}
-            disabled={running || !!edge.busy}
-            className="mt-[18px] h-[42px] gap-2 bg-emerald-500/90 text-emerald-950 hover:bg-emerald-400 sm:w-28"
-          >
-            <Search className={cn("h-4 w-4", running && "animate-pulse")} />
-            {running ? "…" : "Search"}
-          </Button>
+          <div className="mt-[18px] flex h-[42px] gap-2">
+            <Button
+              onClick={() => run()}
+              disabled={running || !!edge.busy}
+              className="h-[42px] gap-2 bg-emerald-500/90 text-emerald-950 hover:bg-emerald-400 sm:w-28"
+            >
+              <Search className={cn("h-4 w-4", running && "animate-pulse")} />
+              {running ? "…" : "Search"}
+            </Button>
+            <Button
+              onClick={() => runCompare()}
+              disabled={comparing || !!edge.busy || !query.trim()}
+              variant="outline"
+              title="Run dense/sparse/hybrid side-by-side to compare retrieval modes"
+              className="h-[42px] gap-1.5 border-border bg-card/40 font-mono text-xs hover:bg-card/60"
+            >
+              <GitCompare className={cn("h-3.5 w-3.5", comparing && "animate-spin")} />
+              {comparing ? "…" : "Compare"}
+            </Button>
+          </div>
         </div>
 
         {/* controls — Shard / Mode / Limit in a unified flex row */}
@@ -237,7 +279,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
                         </div>
                         <div className="mt-1.5 flex items-start gap-1.5">
                           <Quote className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/60" />
-                          <p className="text-sm leading-relaxed text-foreground/90">{r.text}</p>
+                          <p className="text-sm leading-relaxed break-words text-foreground/90">{r.text}</p>
                         </div>
                         <div className="mt-2 flex items-center gap-3">
                           <div className="flex flex-1 items-center gap-2">
@@ -290,6 +332,68 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
           <div className="mt-3 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
             <Zap className="h-3 w-3 text-emerald-400" />
             <span>score: {res.mode === "hybrid" ? "RRF (k=2) of dense + sparse prefetches" : res.mode === "dense" ? "cosine similarity, FastEmbed bge-small-en" : "BM25 term-frequency"}</span>
+          </div>
+        </Panel>
+      )}
+
+      {/* compare-modes panel — shows dense vs sparse vs hybrid side-by-side */}
+      {compare && (
+        <Panel
+          title="Mode Comparison"
+          desc={`dense vs sparse vs hybrid on ${shard} — shows why RRF fusion matters`}
+          right={
+            <button
+              onClick={() => setCompare(null)}
+              className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground"
+            >dismiss</button>
+          }
+        >
+          <div className="grid gap-3 sm:grid-cols-3">
+            {(["dense", "sparse", "hybrid"] as const).map((m) => {
+              const r = compare[m];
+              if (!r) return (
+                <div key={m} className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
+                  {m} failed
+                </div>
+              );
+              return (
+                <div key={m} className={cn(
+                  "rounded-lg border p-3",
+                  m === "hybrid" ? "border-emerald-500/30 bg-emerald-500/[0.04]" : "border-border bg-card/40"
+                )}>
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className={cn(
+                      "rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider",
+                      m === "hybrid" ? "bg-emerald-500/15 text-emerald-300" : "bg-muted text-muted-foreground"
+                    )}>{m}{m === "hybrid" && " · RRF"}</span>
+                    <LatencyBadge ms={r.latency_ms} offline={r.offline} />
+                  </div>
+                  <div className="space-y-1.5">
+                    {r.results.slice(0, 3).map((hit, i) => {
+                      const maxScore = r.results[0]?.score ?? 1;
+                      const pct = Math.max(4, Math.round((hit.score / (maxScore || 1)) * 100));
+                      return (
+                        <div key={hit.id} className="rounded border border-border/60 bg-background/40 p-1.5">
+                          <div className="flex items-center justify-between gap-1.5">
+                            <span className="truncate font-mono text-[10px] font-semibold text-foreground">{hit.slug ?? hit.id.slice(0, 8)}</span>
+                            <span className="shrink-0 font-mono text-[9px] tabular-nums text-emerald-400">{hit.score.toFixed(3)}</span>
+                          </div>
+                          <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted">
+                            <div className={cn("h-full rounded-full", i === 0 ? "bg-emerald-400" : "bg-emerald-400/50")} style={{ width: `${pct}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {r.results.length === 0 && <div className="py-2 text-center text-[10px] text-muted-foreground">no hits</div>}
+                  </div>
+                  <div className="mt-2 font-mono text-[9px] text-muted-foreground">{r.results.length} hits · {r.latency_ms.toFixed(1)}ms</div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-3 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
+            <GitCompare className="h-3 w-3 text-emerald-400" />
+            <span>hybrid (RRF) fuses dense + sparse — surfaces both semantic and keyword matches, typically the most balanced ranking.</span>
           </div>
         </Panel>
       )}

@@ -336,3 +336,25 @@ Stage Summary:
 - 2 features (recent searches + copy query, point drawer copy actions).
 - The Search Playground now remembers recent queries (persisted across reloads) and lets users copy the query; the Point Detail Drawer lets users copy the point ID or text for sharing/export.
 - No unresolved issues; project remains stable and lint-clean across 7 tabs. The app is demo-ready with: command palette, fleet learning hero, guided walkthrough, auto-sync, searchable/exportable activity log, policy simulation + decision-flow, mode comparison, system health, similar-points, point drawer + copy actions, template-assisted writes, diff-highlighted conflict resolution, metrics export, recent searches, and full mobile responsiveness.
+
+---
+Task ID: cron-review-10
+Agent: main (cron webDevReview round 10)
+Task: QA via VLM (overview with fleet learning hero), add animated knowledge-flow particles.
+
+Work Log:
+- Reviewed worklog.md — project had 7 tabs, feature-complete after cron-review-9 (recent searches, copy actions). Cloud at 13 points, edge-engine uptime 3685s.
+- Fresh QA: opened app via gateway, bootstrapped, screenshotted Overview with Fleet Learning hero, ran VLM (z-ai vision). VLM flagged: hero lacks animated knowledge-flow particles (the #1 "hackathon-wow" recommendation).
+
+NEW FEATURE (browser-verified + VLM-verified):
+1. Fleet Learning hero — animated particle flow (FleetOverview.tsx): replaced the static flow arrows with a new `ParticleFlow` component — an inline SVG with animated emerald particles flowing left→right (push lane, top) and sky particles flowing right→left (pull lane, bottom). Particles animate via a 50ms `setInterval` tick updating their x-position + sine-based opacity. Push particles only animate when `online && queueDepth > 0`; pull particles animate when `online`. Includes dashed lane guides + push↑/pull↓ labels. The interval cleans up when neither is active. BUGFIX: added the missing `useEffect` import to FleetOverview.tsx (was only importing `useState` — the ParticleFlow's useEffect caused a client-side hydration crash; the missing import was the root cause of the "Application error" that appeared after the first edit).
+
+VERIFICATION (agent-browser through gateway):
+- Overview → Fleet Learning hero renders with animated particle SVG (55 SVGs on the page, particle SVG confirmed). VLM-verified: "small blue dots visible moving between EDGE and CLOUD, push/pull labels visible, no visual issues, layout clean".
+- Fixed the client-side crash (missing useEffect import) → page now loads correctly after a clean `.next` wipe + restart.
+- Lint clean (eslint . → 0 errors). Both services stable (edge-engine :3030, next :3000 HTTP 200, cloud=13).
+
+Stage Summary:
+- 1 feature (animated particle flow in Fleet Learning hero) + 1 bugfix (missing useEffect import).
+- The Fleet Learning hero now has animated emerald/sky particles flowing between Edge and Cloud — the "living system" feel the VLM recommended. This is the strongest visual demo moment on the Overview tab.
+- No unresolved issues; project remains stable and lint-clean across 7 tabs. The app is demo-ready with: animated fleet learning hero, command palette, guided walkthrough, auto-sync, searchable/exportable activity log, policy simulation + decision-flow, mode comparison, system health, similar-points, point drawer + copy actions, template-assisted writes, diff-highlighted conflict resolution, metrics export, recent searches, and full mobile responsiveness.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import {
   Cpu, Cloud, Bot, Monitor, ArrowRightLeft, TrendingUp, Database,
@@ -287,6 +287,8 @@ function FleetLearningHero({ edge }: { edge: EdgeHook }) {
   const cloudPoints = edge.state?.cloud.total_points ?? 0;
   const pushedBytes = ss?.bytes_pushed ?? 0;
   const pulledBytes = ss?.bytes_pulled ?? 0;
+  const pushActive = online && queueDepth > 0;
+  const pullActive = online;
 
   return (
     <div className="relative overflow-hidden rounded-xl border border-border bg-gradient-to-br from-card/60 via-card/40 to-background/40 p-5">
@@ -308,8 +310,8 @@ function FleetLearningHero({ edge }: { edge: EdgeHook }) {
           </span>
         </div>
 
-        {/* flow diagram: EDGE ↔ CLOUD */}
-        <div className="flex items-center gap-3">
+        {/* flow diagram: EDGE ↔ CLOUD with animated particles */}
+        <div className="flex items-stretch gap-0">
           {/* EDGE side */}
           <div className="flex-1 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.04] p-3">
             <div className="flex items-center gap-2">
@@ -324,11 +326,9 @@ function FleetLearningHero({ edge }: { edge: EdgeHook }) {
             </div>
           </div>
 
-          {/* flow arrows */}
-          <div className="flex flex-col items-center gap-1.5 px-1">
-            <FlowArrow direction="up" active={online && queueDepth > 0} label="push" />
-            <div className="h-px w-12 bg-border" />
-            <FlowArrow direction="down" active={online} label="pull" />
+          {/* animated particle flow channel */}
+          <div className="relative flex w-20 shrink-0 items-center justify-center">
+            <ParticleFlow pushActive={pushActive} pullActive={pullActive} />
           </div>
 
           {/* CLOUD side */}
@@ -355,6 +355,52 @@ function FleetLearningHero({ edge }: { edge: EdgeHook }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Animated SVG particle flow between Edge (left) and Cloud (right).
+ *  Push particles move left→right (emerald); pull particles move right→left (sky).
+ *  Particles only animate when `pushActive` / `pullActive` is true. */
+function ParticleFlow({ pushActive, pullActive }: { pushActive: boolean; pullActive: boolean }) {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!pushActive && !pullActive) return;
+    const id = setInterval(() => setTick((t) => (t + 1) % 1000), 50);
+    return () => clearInterval(id);
+  }, [pushActive, pullActive]);
+
+  const w = 80, h = 80;
+  const pushParticles = pushActive ? [0, 1, 2] : [];
+  const pullParticles = pullActive ? [0, 1, 2] : [];
+
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="h-20 w-20" preserveAspectRatio="none">
+      {/* center divider */}
+      <line x1={w / 2} y1="8" x2={w / 2} y2={h - 8} stroke="currentColor" strokeWidth="0.5" className="text-border" />
+      {/* push lane (top half) — particles move left→right */}
+      <line x1="4" y1={h * 0.3} x2={w - 4} y2={h * 0.3} stroke="currentColor" strokeWidth="0.3" className="text-emerald-500/20" strokeDasharray="2 2" />
+      {pushParticles.map((i) => {
+        const phase = ((tick + i * 80) % 200) / 200;
+        const x = 4 + phase * (w - 8);
+        const opacity = Math.sin(phase * Math.PI) * 0.9 + 0.1;
+        return <circle key={`push-${i}`} cx={x} cy={h * 0.3} r="1.5" fill="currentColor" className="text-emerald-400" style={{ opacity }} />;
+      })}
+      {/* pull lane (bottom half) — particles move right→left */}
+      <line x1="4" y1={h * 0.7} x2={w - 4} y2={h * 0.7} stroke="currentColor" strokeWidth="0.3" className="text-sky-500/20" strokeDasharray="2 2" />
+      {pullParticles.map((i) => {
+        const phase = ((tick + i * 100) % 250) / 250;
+        const x = w - 4 - phase * (w - 8);
+        const opacity = Math.sin(phase * Math.PI) * 0.9 + 0.1;
+        return <circle key={`pull-${i}`} cx={x} cy={h * 0.7} r="1.5" fill="currentColor" className="text-sky-400" style={{ opacity }} />;
+      })}
+      {/* labels */}
+      <text x={w / 2} y={h * 0.3 - 4} textAnchor="middle" className="fill-emerald-400/60" style={{ fontSize: "5px", fontFamily: "var(--font-geist-mono)" }}>
+        {pushActive ? "push↑" : "push"}
+      </text>
+      <text x={w / 2} y={h * 0.7 + 8} textAnchor="middle" className="fill-sky-400/60" style={{ fontSize: "5px", fontFamily: "var(--font-geist-mono)" }}>
+        {pullActive ? "pull↓" : "pull"}
+      </text>
+    </svg>
   );
 }
 

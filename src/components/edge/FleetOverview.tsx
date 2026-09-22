@@ -236,9 +236,9 @@ function DeviceCard({ d, active }: { d: FleetData["devices"][number]; active: bo
 function Meta({ label, value, accent }: { label: string; value: React.ReactNode; accent?: "emerald" | "amber" | "rose" }) {
   const color = accent === "emerald" ? "text-emerald-400" : accent === "amber" ? "text-amber-400" : accent === "rose" ? "text-rose-400" : "text-foreground";
   return (
-    <div className="min-w-0">
+    <div className="min-w-0" title={`${label}: ${value}`}>
       <div className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className={cn("truncate", color)}>{value}</div>
+      <div className={cn("truncate text-[11px]", color)}>{value}</div>
     </div>
   );
 }

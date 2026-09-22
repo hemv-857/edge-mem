@@ -179,13 +179,13 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-12">
           <div className="sm:col-span-5">
             <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Shard</Label>
-            <div className="mt-1 flex gap-1">
+            <div className="mt-1 grid grid-cols-3 gap-1">
               {SHARDS.map((s) => (
                 <button
                   key={s}
                   onClick={() => setShard(s)}
                   className={cn(
-                    "flex-1 rounded-md border px-2 py-1.5 font-mono text-[11px] capitalize transition-colors",
+                    "rounded-md border px-1 py-1.5 font-mono text-[11px] capitalize transition-colors",
                     shard === s ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-border bg-card/40 text-muted-foreground hover:text-foreground"
                   )}
                 >{s}</button>

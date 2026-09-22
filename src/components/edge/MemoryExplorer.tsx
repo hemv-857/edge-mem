@@ -31,6 +31,38 @@ const SHARD_ICONS: Record<string, React.ReactNode> = {
   sensors: <Gauge className="h-4 w-4 text-sky-400" />,
 };
 
+// quick-insert templates — pre-fill the form with realistic field data
+const TEMPLATES = [
+  {
+    label: "vibration incident",
+    title: "P-201 Vibration Spike",
+    criticality: "critical",
+    asset_id: "P-201",
+    text: "P-201 drive-end vibration spiked to 9.2mm/s, BPFO peak at 142Hz — confirmed outer race bearing defect. Isolating pump pending bearing swap per SOP-12.",
+  },
+  {
+    label: "overheat incident",
+    title: "M-15 Overheat",
+    criticality: "high",
+    asset_id: "M-15",
+    text: "Motor M-15 winding temperature reached 95C, cooling fan tripped. Cleaned filter, verified airflow. Monitoring for recurrence.",
+  },
+  {
+    label: "manual excerpt",
+    title: "Seal Replacement Procedure",
+    criticality: "high",
+    asset_id: "P-300",
+    text: "Mechanical seal replacement for P-300 high-pressure pumps. Vent system, remove seal housing, inspect shaft sleeve for wear, install new cartridge seal, align to within 0.05mm TIR, flush and pressure-test before restart.",
+  },
+  {
+    label: "sensor reading",
+    title: "TT-09 Temp Drift",
+    criticality: "medium",
+    asset_id: "TT-09",
+    text: "Temperature sensor TT-09 drift detected — reading 2.3C high vs reference at 50C point. Recalibrated against NIST-traceable reference, offset corrected.",
+  },
+] as const;
+
 export default function MemoryExplorer({ edge }: { edge: EdgeHook }) {
   const memory = edge.memory;
   const shards = memory?.shards ?? {};
@@ -503,15 +535,35 @@ function WriteForm({ edge, shard }: { edge: EdgeHook; shard: string }) {
 
       <div className="space-y-3">
         <div className="space-y-1.5">
-          <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            text <span className="text-rose-400">*</span>
-          </Label>
+          <div className="flex items-center justify-between">
+            <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              text <span className="text-rose-400">*</span>
+            </Label>
+            <span className={cn(
+              "font-mono text-[9px] tabular-nums",
+              text.length === 0 ? "text-muted-foreground/50" : text.length < 20 ? "text-amber-400" : text.length > 500 ? "text-amber-400" : "text-muted-foreground"
+            )}>
+              {text.length} chars{text.length < 20 && text.length > 0 && " · min 20"}
+            </span>
+          </div>
           <Textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="Paste a manual excerpt, incident note, or sensor observation…"
-            className="min-h-24 resize-y font-mono text-xs"
+            className="min-h-[100px] resize-y font-mono text-xs leading-relaxed"
           />
+          {/* quick-insert templates */}
+          <div className="flex flex-wrap gap-1.5">
+            <span className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground/60">templates:</span>
+            {TEMPLATES.map((t) => (
+              <button
+                key={t.label}
+                onClick={() => { setText(t.text); setTitle(t.title); setCriticality(t.criticality); setAssetId(t.asset_id ?? ""); }}
+                className="rounded-full border border-border bg-card/40 px-2 py-0.5 font-mono text-[9px] text-muted-foreground transition-colors hover:border-emerald-500/30 hover:text-emerald-300"
+                title={t.title}
+              >{t.label}</button>
+            ))}
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-2.5">
@@ -594,7 +646,12 @@ function WriteForm({ edge, shard }: { edge: EdgeHook; shard: string }) {
         <Button
           onClick={handleWrite}
           disabled={!canWrite}
-          className="w-full gap-2 bg-emerald-500/90 font-mono text-xs text-emerald-950 hover:bg-emerald-400"
+          className={cn(
+            "w-full gap-2 font-mono text-xs text-emerald-950 transition-all",
+            canWrite && !writing
+              ? "bg-emerald-500/90 hover:bg-emerald-400 edge-glow-emerald"
+              : "bg-muted text-muted-foreground"
+          )}
         >
           {writing ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />

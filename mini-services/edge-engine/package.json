@@ -4,7 +4,7 @@
   "private": true,
   "description": "Qdrant Edge intelligence engine — embedded vector memory, hybrid retrieval, policy + sync",
   "scripts": {
-    "dev": "cd src && python3 main.py",
-    "start": "cd src && python3 main.py"
+    "dev": "bash start.sh",
+    "start": "bash start.sh"
   }
 }

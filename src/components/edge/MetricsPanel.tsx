@@ -215,7 +215,7 @@ export default function MetricsPanel({ edge }: { edge: EdgeHook }) {
           <InfoItem icon={<TrendingUp className="h-3 w-3" />} label="fusion" value="RRF (k=2)" />
           <InfoItem icon={<Database className="h-3 w-3" />} label="shards" value={`${shards.length} local + cloud`} />
           <InfoItem icon={<RefreshCw className="h-3 w-3" />} label="sync" value="dual-write + manifest-diff" />
-          <InfoItem icon={<Cloud className="h-3 w-3" />} label="cloud LLM" value="z-ai-web-dev-sdk (glm-4-plus)" />
+          <InfoItem icon={<Cloud className="h-3 w-3" />} label="cloud LLM" value="OpenAI-compatible API" />
           <InfoItem icon={<Cpu className="h-3 w-3" />} label="runtime" value="single-threaded http.server" />
         </div>
       </Panel>

@@ -19,7 +19,7 @@ export const metadata: Metadata = {
     "Offline-first AI edge memory & intelligence platform. Local semantic memory, hybrid retrieval, policy-driven edge↔cloud sync, conflict resolution — powered by Qdrant Edge.",
   keywords: ["Qdrant Edge", "edge AI", "vector search", "offline", "hybrid retrieval", "edge intelligence"],
   authors: [{ name: "Edge Intelligence" }],
-  icons: { icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg" },
+  icons: { icon: "/logo.svg" },
 };
 
 export default function RootLayout({

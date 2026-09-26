@@ -67,7 +67,7 @@ Work Log:
 - page.tsx: sticky TopBar + live-KPI sub-strip + Tabs (Overview/Memory/Search/Sync/Activity/Policy) + sticky footer (min-h-screen flex flex-col, mt-auto).
 - Delegated 3 panels (MemoryExplorer, ActivityLog, PolicyEngine) to a full-stack-developer subagent (Task 4-a) — built + lint-clean; also fixed a qs() default-param bug in edge-api.ts.
 - Built 3 demo-critical panels myself: FleetOverview (device cards + cloud panel + contribution bars), SearchPlayground (query/shard/mode controls, example chips, scored results with score bars, OFFLINE badge), SyncConsole (queue, last-sync summary, manifest-diff, conflict cards with local/remote/merge resolution).
-- Cloud-LLM intelligence layer (Task 5): src/app/api/intelligence/route.ts (Next.js route, z-ai-web-dev-sdk, online-only). Actions: distill_sop (incident → reusable SOP) + auto_tag. Wired "Distill → SOP" button into SearchPlayground results (online only) → cloud LLM generates SOP → "Save to manuals shard" writes it locally → queues for fleet sync. This is the edge/cloud division of labor made visible.
+- Cloud-LLM intelligence layer (Task 5): src/app/api/intelligence/route.ts (Next.js route, OpenAI-compatible LLM API, online-only). Actions: distill_sop (incident → reusable SOP) + auto_tag. Wired "Distill → SOP" button into SearchPlayground results (online only) → cloud LLM generates SOP → "Save to manuals shard" writes it locally → queues for fleet sync. This is the edge/cloud division of labor made visible.
 - Fixed lucide icon Robot→Bot (build error).
 - Fixed the critical keep-alive hogging bug: the single-threaded http.server with HTTP/1.1 keep-alive let Caddy's persistent connection monopolise the accept loop, making direct curls time out (looked like hangs). Switched to HTTP/1.0 + Connection: close → all clients served round-robin. Also raised listen backlog to 128, added manifest-hash + cloud-contrib caching in the engine to cut binding calls during polling, and reduced frontend polling to 4.5s/3.5s.
 - Browser-verified the full golden path via agent-browser through the gateway (http://localhost:81/): Overview renders live data (3 devices, 12 cloud pts) → Bootstrap pulls 12 (LOCAL PTS 0→12) → Memory Explorer shows shards+points → Search returns beta's verified fixes with RRF scores (1.0000, 0.6667) → toggle OFFLINE + search works (OFFLINE badge, "zero network calls") → Manufacture conflict + Sync surfaces conflict card (alpha 50Nm vs beta 45Nm) → Merge resolution clears it → Cloud-LLM "Distill → SOP" generates a clean 8-step SOP from the P-202 incident → Save to manuals (7→8 pts, queued for fleet sync). No console/runtime errors throughout.
@@ -86,7 +86,7 @@ Task: QA pass via agent-browser + VLM, fix bugs, add new features, improve styli
 
 Work Log:
 - Reviewed worklog.md — project was complete and browser-verified from the prior session.
-- Performed QA via agent-browser: opened the app through the gateway (http://localhost:81/), screenshotted all 6 tabs, ran the VLM skill (z-ai vision CLI) on the Overview, Search, and Sync screenshots to get concrete UI/UX feedback.
+- Performed QA via agent-browser: opened the app through the gateway (http://localhost:81/), screenshotted all 6 tabs, ran the VLM skill (vision model CLI) on the Overview, Search, and Sync screenshots to get concrete UI/UX feedback.
 - VLM-identified issues (verified against the code): (1) FleetOverview — 0-contribution bar got a tiny bar instead of an empty state; device-gamma (remote) showed an empty data block where live-only fields would be; cloud shards lacked icons; large empty space below the cloud panel. (2) SearchPlayground — search button taller than the query textarea; controls row underutilized width; excessive vertical padding. (3) SyncConsole — "critical: 0" shown in red even when zero; manifest diffs lacked relative-time context.
 
 BUG FIXES (all browser-verified):
@@ -126,7 +126,7 @@ Task: QA pass via agent-browser + VLM, add new features (Memory filter, Similar 
 
 Work Log:
 - Reviewed worklog.md — project was feature-complete and browser-verified after cron-review-1 (Point Detail Drawer, Sync History Timeline, Auto-tag, Overview mini activity feed all present).
-- Performed fresh QA: opened app via gateway, screenshotted all 6 tabs, ran VLM (z-ai vision) on Memory and Activity tabs. VLM flagged: inconsistent shard card heights (sensors shorter when 0 points), missing search/filter/stats within Memory Explorer points list, no latency/metrics visualization. (The recurring "floating N badge" the VLM reports was verified via DOM inspection — `document.querySelectorAll('*')` for fixed/absolute positioned single-letter elements returns empty; it is a VLM hallucination from the dark theme, not a real bug.)
+- Performed fresh QA: opened app via gateway, screenshotted all 6 tabs, ran VLM (vision model) on Memory and Activity tabs. VLM flagged: inconsistent shard card heights (sensors shorter when 0 points), missing search/filter/stats within Memory Explorer points list, no latency/metrics visualization. (The recurring "floating N badge" the VLM reports was verified via DOM inspection — `document.querySelectorAll('*')` for fixed/absolute positioned single-letter elements returns empty; it is a VLM hallucination from the dark theme, not a real bug.)
 
 NEW FEATURES (all browser-verified):
 1. Memory Explorer — search/filter/stats (MemoryExplorer.tsx): added a stats summary bar (4 mini cards: total / critical / local-only / origins count, derived directly from the points list with no effect), a text filter input (filters by slug/title/text/asset/origin, with clear-X button), and criticality filter chips (critical/high/medium/low, each showing its count, colored when active, hidden when count is 0 unless active). The list shows "filtered/total shown" (e.g. "3/7 shown"). Empty-filter state and no-match state both handled. Bumped the fetch limit from 20→50 so the filter has more to work with. Fixed the shard-card desc min-height so cards align even when a shard has 0 points.
@@ -161,7 +161,7 @@ Task: QA via VLM, add Policy Simulate + Search Compare modes + System Health sco
 
 Work Log:
 - Reviewed worklog.md — project had 7 tabs, was feature-complete and lint-clean after cron-review-2 (Memory filter, Similar Points, Metrics dashboard).
-- Fresh QA: opened app via gateway, screenshotted all 7 tabs, ran VLM (z-ai vision) on Search, Metrics, and Policy tabs. VLM flagged: search results text wrapping awkward on long words; no way to compare retrieval modes; policy rules used ambiguous `|` separator for IN lists; metrics lacked a summary health score; zero-byte sync was confusing.
+- Fresh QA: opened app via gateway, screenshotted all 7 tabs, ran VLM (vision model) on Search, Metrics, and Policy tabs. VLM flagged: search results text wrapping awkward on long words; no way to compare retrieval modes; policy rules used ambiguous `|` separator for IN lists; metrics lacked a summary health score; zero-byte sync was confusing.
 
 NEW FEATURES (all browser-verified + VLM-verified):
 1. Policy Simulate panel (PolicyEngine.tsx + backend POST /api/edge/policy/simulate): a new panel at the bottom of the Policy tab. Lets you pick domain/criticality/sensitivity tags via button-group selectors (with 3 quick presets: "critical incident", "restricted sensor", "routine manual"), then "simulate" runs the tags against the current policy rules WITHOUT writing anything. Shows the decision (SYNC-NOW/QUEUED/LOCAL-ONLY with reason) + a full rule trace: each rule shows its condition, the point's value, whether it matched, and the resulting action. The matched rule (the first that fires) is highlighted emerald; rules that would match but were skipped (not first) are amber; non-matches are muted. Verified: critical+incident → SYNC-NOW (rule r3 matches, trace shows rule 1 skipped because sensitivity=internal not restricted).
@@ -195,7 +195,7 @@ Task: QA via VLM, add Activity Log search/export/stats, Sync auto-sync toggle, O
 
 Work Log:
 - Reviewed worklog.md — project had 7 tabs, was feature-complete and lint-clean after cron-review-3 (Policy Simulate, Search Compare modes, System Health score).
-- Fresh QA: opened app via gateway, screenshotted Sync/Activity/Overview/conflict-card, ran VLM (z-ai vision) on Sync and Activity tabs. VLM flagged: no text search/export in Activity Log; no auto-sync in Sync Console; no guided demo walkthrough. (Recurring "N" badge confirmed hallucination — DOM-verified empty.)
+- Fresh QA: opened app via gateway, screenshotted Sync/Activity/Overview/conflict-card, ran VLM (vision model) on Sync and Activity tabs. VLM flagged: no text search/export in Activity Log; no auto-sync in Sync Console; no guided demo walkthrough. (Recurring "N" badge confirmed hallucination — DOM-verified empty.)
 
 NEW FEATURES (all browser-verified + VLM-verified):
 1. Activity Log — search + stats + export (ActivityLog.tsx): added a text search input (filters by message/kind/device/meta JSON, with clear-X button), a top stats summary bar (top-4 kinds with colored dots + counts + percentage mini-bars), and an "export" button that downloads the visible (filtered) events as a TSV file (timestamp/device/kind/message/meta). The header shows "visible/total events" when filtered. Verified: typing "sync" → 8/37 events.
@@ -220,7 +220,7 @@ Task: QA via VLM (mobile + memory write form), add char counter + templates, mob
 
 Work Log:
 - Reviewed worklog.md — project had 7 tabs, feature-complete after cron-review-4 (Activity search/export, Sync auto-sync, Demo Walkthrough). Cloud at 13 points (auto-sync had pushed a prior write).
-- Fresh QA: opened app via gateway, set viewport to 390x844 (mobile), screenshotted Overview/Search/Sync mobile + desktop Memory write form, ran VLM (z-ai vision) on mobile Overview + mobile Search + Memory write form. VLM flagged: mobile Demo Walkthrough + device cards cramped, mobile search controls squeezed, memory write textarea too short + no char counter + no templates.
+- Fresh QA: opened app via gateway, set viewport to 390x844 (mobile), screenshotted Overview/Search/Sync mobile + desktop Memory write form, ran VLM (vision model) on mobile Overview + mobile Search + Memory write form. VLM flagged: mobile Demo Walkthrough + device cards cramped, mobile search controls squeezed, memory write textarea too short + no char counter + no templates.
 
 NEW FEATURES + BUG FIXES (browser-verified + VLM-verified):
 1. Memory Write form — char counter + quick-insert templates (MemoryExplorer.tsx): added a live char counter next to the "text" label (shows "N chars" with amber warning if <20 or >500, with "· min 20" hint when too short). Added 4 quick-insert template chips below the textarea ("vibration incident", "overheat incident", "manual excerpt", "sensor reading") that pre-fill the text, title, criticality, and asset_id fields with realistic field data. Increased textarea min-height from 24 (96px) to 100px + leading-relaxed for comfortable editing. Improved the "write point" button: now glows emerald (edge-glow-emerald) when enabled, mutes when disabled — clear primary-action visual weight.
@@ -244,7 +244,7 @@ Task: QA via VLM (topbar + overview), add Command Palette (⌘K) + Fleet Learnin
 
 Work Log:
 - Reviewed worklog.md — project had 7 tabs, feature-complete after cron-review-5 (char counter + templates, mobile responsive polish). Cloud at 13 points, edge-engine uptime 1363s.
-- Fresh QA: opened app via gateway, screenshotted topbar + bootstrapped overview, ran VLM (z-ai vision) on both. VLM flagged: no command palette (⌘K) for a "console" app, no hero/summary element on overview, topbar density/cramping.
+- Fresh QA: opened app via gateway, screenshotted topbar + bootstrapped overview, ran VLM (vision model) on both. VLM flagged: no command palette (⌘K) for a "console" app, no hero/summary element on overview, topbar density/cramping.
 
 NEW FEATURES (browser-verified + VLM-verified):
 1. Command Palette (⌘K / Ctrl+K) — new CommandPalette.tsx component wired into page.tsx. Triggered by Cmd/Ctrl+K (global keydown listener) OR by a new "⌘K Search" button added to the TopBar. Opens a centered modal with: a search input (auto-focused), grouped commands (Navigate: 7 tabs; Actions: Bootstrap, Sync now, Go offline/online, Flush queue (when queue>0), Manufacture conflict), keyboard navigation (↑↓ to move, ↵ to select, esc to close), live status footer (online/offline + queued count). Commands filter by label/hint/keywords. Verified: Ctrl+K opens palette → type "sync" → shows sync-related commands. VLM-verified.
@@ -270,7 +270,7 @@ Task: QA via VLM (sync/conflict/footer), add conflict diff highlighting + footer
 
 Work Log:
 - Reviewed worklog.md — project had 7 tabs, feature-complete after cron-review-6 (Command Palette, Fleet Learning hero). Cloud at 13 points, edge-engine uptime 2061s.
-- Fresh QA: opened app via gateway, screenshotted sync empty state + conflict card + footer, ran VLM (z-ai vision) on all three. VLM flagged: conflict card lacks diff highlighting/3-way merge view; footer lacks keyboard shortcut hints; "bytes↑/↓" labels awkward; UNCHANGED badge low-contrast.
+- Fresh QA: opened app via gateway, screenshotted sync empty state + conflict card + footer, ran VLM (vision model) on all three. VLM flagged: conflict card lacks diff highlighting/3-way merge view; footer lacks keyboard shortcut hints; "bytes↑/↓" labels awkward; UNCHANGED badge low-contrast.
 
 NEW FEATURES + BUG FIXES (browser-verified + VLM-verified):
 1. Conflict card — word-level diff highlighting + 3-way merge view (SyncConsole.tsx): added a `diffWords()` LCS-based word-diff helper that segments text into same/added/removed words. The conflict card's `Side` component now renders each word with highlight: added words get emerald bg, removed words get rose bg + line-through. A +/- counter at the bottom of each side shows the change counts. The "Merge…" view is now labeled "3-way merge · edit the resolved text" with a "combine both" quick button that concatenates both versions with a separator, plus a char counter.
@@ -295,7 +295,7 @@ Task: QA via VLM (metrics + policy simulate), add metrics export + event bar imp
 
 Work Log:
 - Reviewed worklog.md — project had 7 tabs, feature-complete after cron-review-7 (conflict diff highlighting, footer keyboard hints, label/contrast fixes). Cloud at 13 points, edge-engine uptime 2534s.
-- Fresh QA: ran the full golden path end-to-end (bootstrap → offline → search → online → sync) with no runtime errors. Screenshotted Metrics + Policy simulate panels, ran VLM (z-ai vision) on both. VLM flagged: event-breakdown bars too faint for low counts; no metrics export; policy simulate lacks a visual decision-flow; latency chart axis ambiguous.
+- Fresh QA: ran the full golden path end-to-end (bootstrap → offline → search → online → sync) with no runtime errors. Screenshotted Metrics + Policy simulate panels, ran VLM (vision model) on both. VLM flagged: event-breakdown bars too faint for low counts; no metrics export; policy simulate lacks a visual decision-flow; latency chart axis ambiguous.
 
 NEW FEATURES + STYLING FIXES (browser-verified + VLM-verified):
 1. Metrics — event-breakdown improvements + export (MetricsPanel.tsx): increased bar height from h-1.5 to h-2 for better visibility; increased minimum bar width from 2% to 4% so low-count events are visible; added percentage labels next to counts (e.g. "28 28%"); added an "export" button to the Event Breakdown panel header that downloads the kind/count breakdown as a TSV. Added the Download icon import. VLM-verified: "export button in top-right, event bars visible with percentage labels (28%, 26%, 26%, 9%, 3%)".
@@ -319,7 +319,7 @@ Task: QA via VLM (search results + distill SOP), add recent searches + copy acti
 
 Work Log:
 - Reviewed worklog.md — project had 7 tabs, feature-complete after cron-review-8 (metrics export, policy decision-flow). Cloud at 13 points, edge-engine uptime 3217s.
-- Fresh QA: opened app via gateway, bootstrapped, ran the full search + distill-SOP flow. Screenshotted search results + distill result, ran VLM (z-ai vision) on both. VLM-verified the distill SOP: "distilled SOP visible with 8 numbered steps, Save to manuals button present, no visual issues". VLM flagged: no recent searches, no copy query/result actions.
+- Fresh QA: opened app via gateway, bootstrapped, ran the full search + distill-SOP flow. Screenshotted search results + distill result, ran VLM (vision model) on both. VLM-verified the distill SOP: "distilled SOP visible with 8 numbered steps, Save to manuals button present, no visual issues". VLM flagged: no recent searches, no copy query/result actions.
 
 NEW FEATURES (browser-verified + VLM-verified):
 1. Search Playground — recent searches + copy query (SearchPlayground.tsx): added a "Recent searches" section (persists to localStorage, top 5, deduped by query) that loads on mount and shows clickable sky-accented chips with shard prefix + truncated query. Clicking a recent search restores the shard + mode + query and re-runs. Includes a "clear" button to wipe history. Added a "copy query" action (Copy icon) that appears when the textarea has text, copying the query to the clipboard with a toast. VLM-verified: "RECENT SEARCHES section visible with 2 clickable chips (inc/ bearing vibration, inc/ vibration outer race bearing d...)".
@@ -344,7 +344,7 @@ Task: QA via VLM (overview with fleet learning hero), add animated knowledge-flo
 
 Work Log:
 - Reviewed worklog.md — project had 7 tabs, feature-complete after cron-review-9 (recent searches, copy actions). Cloud at 13 points, edge-engine uptime 3685s.
-- Fresh QA: opened app via gateway, bootstrapped, screenshotted Overview with Fleet Learning hero, ran VLM (z-ai vision). VLM flagged: hero lacks animated knowledge-flow particles (the #1 "hackathon-wow" recommendation).
+- Fresh QA: opened app via gateway, bootstrapped, screenshotted Overview with Fleet Learning hero, ran VLM (vision model). VLM flagged: hero lacks animated knowledge-flow particles (the #1 "hackathon-wow" recommendation).
 
 NEW FEATURE (browser-verified + VLM-verified):
 1. Fleet Learning hero — animated particle flow (FleetOverview.tsx): replaced the static flow arrows with a new `ParticleFlow` component — an inline SVG with animated emerald particles flowing left→right (push lane, top) and sky particles flowing right→left (pull lane, bottom). Particles animate via a 50ms `setInterval` tick updating their x-position + sine-based opacity. Push particles only animate when `online && queueDepth > 0`; pull particles animate when `online`. Includes dashed lane guides + push↑/pull↓ labels. The interval cleans up when neither is active. BUGFIX: added the missing `useEffect` import to FleetOverview.tsx (was only importing `useState` — the ParticleFlow's useEffect caused a client-side hydration crash; the missing import was the root cause of the "Application error" that appeared after the first edit).

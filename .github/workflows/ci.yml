@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      # src/lib/db.ts imports @prisma/client, which only exports PrismaClient
+      # after generation.
+      - run: bunx prisma generate
+      - run: bunx tsc --noEmit
+
+  e2e:
+    name: e2e audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PORT: "3001"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: mini-services/edge-engine/requirements.txt
+
+      # The audit restarts the engine with a bare `bash start.sh`, so the
+      # interpreter holding the engine deps has to be inherited, not just used
+      # once here.
+      - name: Export interpreter for start.sh
+        run: echo "PYTHON=$(command -v python3)" >> "$GITHUB_ENV"
+
+      - name: Cache Qdrant binary + embedding models
+        uses: actions/cache@v4
+        with:
+          path: |
+            .qdrant/qdrant
+            ~/.cache/huggingface
+            ~/.cache/ms-playwright
+          key: edge-mem-${{ runner.os }}-qdrant-v1.19.1-${{ hashFiles('mini-services/edge-engine/requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r mini-services/edge-engine/requirements.txt
+          python -m pip install playwright==1.62.0
+          python -m playwright install --with-deps chromium
+          bun install --frozen-lockfile
+
+      - name: Start Qdrant + edge-engine (device-alpha) + federated peer (device-beta)
+        run: nohup ./mini-services/edge-engine/start.sh > edge-engine.log 2>&1 &
+
+      - name: Start stub LLM + Next dev
+        run: |
+          nohup python tests/audit/fake_llm.py > fake-llm.log 2>&1 &
+          LLM_BASE_URL=http://127.0.0.1:11434/v1 LLM_API_KEY=ci LLM_MODEL=stub \
+            nohup bun run dev > next.log 2>&1 &
+
+      - name: Wait for every service
+        run: |
+          for _ in $(seq 1 90); do
+            ok=1
+            curl -sf http://localhost:3030/api/edge/health >/dev/null || ok=0
+            curl -sf http://localhost:3031/api/edge/health >/dev/null || ok=0
+            curl -sf http://localhost:11434/v1/models >/dev/null || ok=0
+            curl -sf http://localhost:3001/ >/dev/null || ok=0
+            [ "$ok" = "1" ] && break
+            sleep 2
+          done
+          echo "--- edge (alpha) ---";  curl -s http://localhost:3030/api/edge/health || true
+          echo; echo "--- edge (beta) ---";  curl -s http://localhost:3031/api/edge/health || true
+          echo; echo "--- next ---";        curl -s "http://localhost:3001/api/edge/health?XTransformPort=3030" || true
+          echo; echo "--- stub llm ---";    curl -s http://localhost:11434/v1/models || true
+          echo
+          curl -sf http://localhost:3030/api/edge/health >/dev/null
+          curl -sf http://localhost:3001/ >/dev/null
+
+      - name: Run the e2e audit
+        run: python tests/audit/audit.py http://localhost:3001
+
+      - name: Upload logs + screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-artifacts
+          if-no-files-found: ignore
+          path: |
+            tests/audit/shots/
+            edge-engine.log
+            next.log
+            dev.log
+            fake-llm.log
+            mini-services/edge-engine/data-beta.log
+            .qdrant/qdrant.log

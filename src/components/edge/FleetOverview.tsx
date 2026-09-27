@@ -174,7 +174,8 @@ function DeviceCard({ d, active }: { d: FleetData["devices"][number]; active: bo
             <div className="flex items-center gap-2">
               <span className="font-mono text-sm font-semibold text-foreground">{d.id}</span>
               {active && <span className="rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-emerald-300">active</span>}
-              {!d.live && <span className="rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-sky-300">remote</span>}
+              {!d.live && d.federated && <span className="rounded border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-violet-300" title="FEDERATED_PEERS member — probed live on its own port">federated</span>}
+              {!d.live && !d.federated && <span className="rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-sky-300">remote</span>}
             </div>
             <div className="text-xs text-muted-foreground">{d.name.replace(/^.*?— /, "")}</div>
           </div>
@@ -220,9 +221,12 @@ function DeviceCard({ d, active }: { d: FleetData["devices"][number]; active: bo
           <Meta label="location" value={d.location} />
           <Meta label="technician" value={d.technician} />
           <Meta label="kind" value={d.kind ?? "remote"} />
+          {/* federated peers probe their own engine, so reachable != the static fleet record */}
+          <Meta label="reach" value={d.federated ? (d.reachable ? "reachable" : "peer down") : "static"} accent={d.federated ? (d.reachable ? "emerald" : "amber") : undefined} />
+          <Meta label="local pts" value={d.total_points} accent={d.total_points > 0 ? "emerald" : undefined} />
+          <Meta label="queue" value={d.queue_depth} accent={d.queue_depth > 0 ? "amber" : undefined} />
           <Meta label="cloud contrib" value={d.cloud_contributed} accent={d.cloud_contributed > 0 ? "emerald" : undefined} />
           <Meta label="last sync" value={formatRelative(d.last_sync_at)} />
-          <Meta label="status" value={d.online ? "reachable" : "unreachable"} accent={d.online ? "emerald" : "amber"} />
           {d.cloud_contributed > 0 && (
             <div className="col-span-2 sm:col-span-3 mt-1 flex items-center gap-2 rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1.5">
               <Server className="h-3 w-3 text-sky-300" />
@@ -265,7 +269,8 @@ function MiniActivityFeed({ activity }: { activity: ActivityEntry[] }) {
                   <span className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">{a.kind}</span>
                   <span className="font-mono text-[9px] text-muted-foreground/60">{new Date(a.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
                 </div>
-                <p className="truncate text-foreground/80">{a.message}</p>
+                {/* ponytail: wrap instead of truncate — a nowrap line sets the grid's min-content and blows out the layout below ~600px */}
+                <p className="break-words text-foreground/80">{a.message}</p>
               </div>
             </li>
           ))}

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Cpu, LayoutDashboard, Database, Search, RefreshCw, Activity, Shield, Cloud, HardDrive, Zap, LineChart } from "lucide-react";
+import { Cpu, LayoutDashboard, Database, Search, RefreshCw, Activity, Shield, Cloud, HardDrive, Zap, LineChart, Layers } from "lucide-react";
 import { useEdge } from "@/hooks/use-edge";
 import { cn } from "@/lib/utils";
 import TopBar from "@/components/edge/TopBar";
@@ -14,6 +14,7 @@ import ActivityLog from "@/components/edge/ActivityLog";
 import PolicyEngine from "@/components/edge/PolicyEngine";
 import PointDetailDrawer from "@/components/edge/PointDetailDrawer";
 import MetricsPanel from "@/components/edge/MetricsPanel";
+import CloudBrowser from "@/components/edge/CloudBrowser";
 import CommandPalette from "@/components/edge/CommandPalette";
 import { formatBytes, formatRelative } from "@/components/edge/edge-ui";
 
@@ -73,13 +74,15 @@ export default function Home() {
         )}
 
         <Tabs value={tab} onValueChange={setTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-3 gap-1 bg-card/40 sm:grid-cols-7">
+          {/* h-auto! overrides TabsList's fixed h-9 — otherwise 3 mobile rows overflow the 36px box and the panel covers the last row */}
+          <TabsList className="grid h-auto! min-h-9 w-full grid-cols-3 gap-1 bg-card/40 sm:grid-cols-8">
             <TabsTrigger value="overview" className="gap-1.5 font-mono text-xs"><LayoutDashboard className="h-3.5 w-3.5" />Overview</TabsTrigger>
             <TabsTrigger value="memory" className="gap-1.5 font-mono text-xs"><Database className="h-3.5 w-3.5" />Memory</TabsTrigger>
             <TabsTrigger value="search" className="gap-1.5 font-mono text-xs"><Search className="h-3.5 w-3.5" />Search</TabsTrigger>
             <TabsTrigger value="sync" className="gap-1.5 font-mono text-xs"><RefreshCw className="h-3.5 w-3.5" />Sync</TabsTrigger>
             <TabsTrigger value="metrics" className="gap-1.5 font-mono text-xs"><LineChart className="h-3.5 w-3.5" />Metrics</TabsTrigger>
             <TabsTrigger value="activity" className="gap-1.5 font-mono text-xs"><Activity className="h-3.5 w-3.5" />Activity</TabsTrigger>
+            <TabsTrigger value="cloud" className="gap-1.5 font-mono text-xs"><Layers className="h-3.5 w-3.5" />Cloud</TabsTrigger>
             <TabsTrigger value="policy" className="gap-1.5 font-mono text-xs"><Shield className="h-3.5 w-3.5" />Policy</TabsTrigger>
           </TabsList>
 
@@ -89,6 +92,7 @@ export default function Home() {
           <TabsContent value="sync" className="mt-5 focus-visible:outline-none"><SyncConsole edge={edge} /></TabsContent>
           <TabsContent value="metrics" className="mt-5 focus-visible:outline-none"><MetricsPanel edge={edge} /></TabsContent>
           <TabsContent value="activity" className="mt-5 focus-visible:outline-none"><ActivityLog edge={edge} /></TabsContent>
+          <TabsContent value="cloud" className="mt-5 focus-visible:outline-none"><CloudBrowser /></TabsContent>
           <TabsContent value="policy" className="mt-5 focus-visible:outline-none"><PolicyEngine edge={edge} /></TabsContent>
         </Tabs>
       </main>

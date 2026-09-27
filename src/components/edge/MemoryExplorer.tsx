@@ -350,7 +350,7 @@ function PointsList({ edge, shard }: { edge: EdgeHook; shard: string }) {
           {filtered.map((p) => (
             <li
               key={p.id}
-              onClick={() => edge.openPoint({ id: p.id, shard, ...p })}
+              onClick={() => edge.openPoint({ ...p, shard })}
               className="group cursor-pointer rounded-lg border border-border/60 bg-background/40 p-3 transition-colors hover:border-emerald-500/30 hover:bg-background/60"
             >
               <div className="flex items-start justify-between gap-3">

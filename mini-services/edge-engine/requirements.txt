@@ -1,0 +1,6 @@
+# Edge memory engine — direct dependencies.
+# mini-services/edge-engine/start.sh installs this file when the resolved
+# interpreter is missing them; pins keep a fresh bootstrap reproducible.
+qdrant-edge-py==0.8.0
+fastembed==0.8.1
+qdrant-client==1.19.1

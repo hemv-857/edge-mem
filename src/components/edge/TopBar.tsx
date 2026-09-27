@@ -25,7 +25,7 @@ export default function TopBar({ edge, onOpenPalette }: { edge: EdgeHook; onOpen
           </div>
           <div className="leading-tight">
             <div className="flex items-center gap-2">
-              <span className="font-mono text-sm font-bold tracking-tight text-foreground">EDGE.MEM</span>
+              <h1 className="font-mono text-sm font-bold tracking-tight text-foreground">EDGE.MEM</h1>
               <span className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
                 Qdrant Edge
               </span>
@@ -61,6 +61,7 @@ export default function TopBar({ edge, onOpenPalette }: { edge: EdgeHook; onOpen
             checked={online}
             onCheckedChange={(v) => edge.setOnline(v)}
             disabled={!!busy}
+            aria-label={online ? "Connectivity: online — switch to offline" : "Connectivity: offline — switch to online"}
             className={cn("data-[state=checked]:bg-emerald-500 data-[state=unchecked]:bg-amber-500/70")}
           />
         </div>

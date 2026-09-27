@@ -131,15 +131,23 @@ else
 fi
 
 # 启动 Caddy（如果存在 Caddyfile）
-echo "🚀 启动 Caddy..."
+# Caddy 只是 ?XTransformPort 的网关；Next 自身的 /api/edge/[...path] 已经做了同样的转发，
+# 没装 caddy 时直接跳过，否则整条启动链会在这里挂掉。
+if command -v caddy >/dev/null 2>&1 && [ -f Caddyfile ]; then
+    echo "🚀 启动 Caddy..."
+    echo "✅ Caddy 已启动（前台运行）"
+    echo ""
+    echo "🎉 所有服务已启动！"
+    echo ""
+    echo "💡 按 Ctrl+C 停止所有服务"
+    echo ""
+    exec caddy run --config Caddyfile --adapter caddyfile
+fi
 
-# Caddy 作为前台进程运行（主进程）
-echo "✅ Caddy 已启动（前台运行）"
+echo "ℹ️  未找到 caddy，跳过网关 — Next.js 已直接处理 /api/edge?XTransformPort=NNNN"
 echo ""
 echo "🎉 所有服务已启动！"
 echo ""
 echo "💡 按 Ctrl+C 停止所有服务"
 echo ""
-
-# Caddy 作为主进程运行
-exec caddy run --config Caddyfile --adapter caddyfile
+wait

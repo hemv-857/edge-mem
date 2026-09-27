@@ -76,3 +76,48 @@ def seed_fleet(fleet):
     if cloud_n:
         fleet.log("system", "seed", f"Seeded cloud knowledge base — {cloud_n} points (from beta/gamma)",
                   {"cloud": cloud_n})
+
+
+# Raw telemetry written straight to each hosted device's sensors shard so the
+# TTL retention sweep has real data to expire. Half are older than the default
+# 600s TTL on purpose — the first retention run should show expiries.
+SENSOR_SEED = [
+    {"slug": "sensor-alpha-vib-de",  "text": "P-201 drive-end vibration 4.8 mm/s RMS", "sensor_type": "vibration", "value": 4.8, "unit": "mm/s", "severity": "warning", "age_s": 30},
+    {"slug": "sensor-alpha-vib-nd",  "text": "P-201 non-drive-end vibration 2.1 mm/s RMS", "sensor_type": "vibration", "value": 2.1, "unit": "mm/s", "severity": "info", "age_s": 45},
+    {"slug": "sensor-alpha-temp-b",  "text": "Bearing housing temperature 61 C on P-201", "sensor_type": "temperature", "value": 61, "unit": "C", "severity": "info", "age_s": 90},
+    {"slug": "sensor-alpha-amp",     "text": "Motor current 12.4 A steady load", "sensor_type": "current", "value": 12.4, "unit": "A", "severity": "info", "age_s": 120},
+    {"slug": "sensor-alpha-vib-de-old",  "text": "P-200 drive-end vibration 6.7 mm/s RMS (superseded)", "sensor_type": "vibration", "value": 6.7, "unit": "mm/s", "severity": "warning", "age_s": 1800},
+    {"slug": "sensor-alpha-vib-nd-old",  "text": "P-200 non-drive-end vibration 5.9 mm/s RMS (superseded)", "sensor_type": "vibration", "value": 5.9, "unit": "mm/s", "severity": "warning", "age_s": 1500},
+    {"slug": "sensor-alpha-temp-old",    "text": "Bearing housing temperature 78 C on P-200 (superseded)", "sensor_type": "temperature", "value": 78, "unit": "C", "severity": "critical", "age_s": 2400},
+    {"slug": "sensor-alpha-press-old",   "text": "Discharge pressure 8.2 bar on P-200 (superseded)", "sensor_type": "pressure", "value": 8.2, "unit": "bar", "severity": "warning", "age_s": 3600},
+]
+
+
+def seed_devices(fleet, device_id: str = "device-alpha") -> int:
+    """Drop raw telemetry into a hosted device's sensors shard (once)."""
+    import embed as _emb
+    import uuid as _uuid
+
+    dev = fleet.devices.get(device_id)
+    if dev is None:
+        return 0
+    st = dev.shards["sensors"]
+    if st.count() > 0:
+        return 0
+    now = int(time.time() * 1000)
+    n = 0
+    for p in SENSOR_SEED:
+        pid = str(_uuid.uuid5(_uuid.NAMESPACE_URL, p["slug"]))
+        payload = {k: v for k, v in p.items() if k != "age_s"}
+        payload.update({
+            "domain": "sensor", "criticality": "low", "sensitivity": "internal",
+            "origin_device": device_id, "sync_state": "local_only",
+            "updated_at": now - p["age_s"] * 1000,
+        })
+        st.upsert(pid, _emb.embed_dense(payload["text"]), _emb.embed_sparse_doc(payload["text"]), payload)
+        n += 1
+    st.optimize(); st.flush()
+    if n:
+        fleet.log(device_id, "seed", f"Seeded {n} raw sensor readings (sensors shard)",
+                  {"points": n})
+    return n

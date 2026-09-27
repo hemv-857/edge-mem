@@ -83,9 +83,12 @@ export interface SearchResult {
   title?: string;
   domain?: string;
   criticality?: string;
+  sensitivity?: string;
   origin_device?: string;
   asset_id?: string;
   updated_at?: number;
+  /** present when explain=true: per-channel contributions to the fused score */
+  scores?: { dense: number | null; sparse: number | null; fused: number };
 }
 
 export interface SearchResponse {
@@ -94,7 +97,13 @@ export interface SearchResponse {
   offline: boolean;
   mode: string;
   shard: string;
+  filters?: Record<string, string>;
+  explained?: boolean;
 }
+
+/** Keys the backend's FILTERABLE_KEYS accepts in a search filter request. */
+export type SearchFilterKey = "domain" | "criticality" | "sensitivity" | "origin_device";
+export type SearchFilters = Partial<Record<SearchFilterKey, string>>;
 
 export interface ConflictSide {
   text: string;
@@ -153,6 +162,10 @@ export interface FleetDevice {
   bytes_pulled: number;
   cloud_contributed: number;
   shards: MemoryShard[];
+  /** federated peer only: false when the peer instance is down */
+  reachable?: boolean;
+  /** true for members synced through FEDERATED_PEERS rather than static fleet records */
+  federated?: boolean;
 }
 
 export interface FleetOverview {
@@ -192,3 +205,98 @@ export interface WriteResult {
 }
 
 export type SearchMode = "dense" | "sparse" | "hybrid";
+
+// ---------------------------------------------------------------------------
+// cloud collections browser (centralized knowledge base)
+// ---------------------------------------------------------------------------
+export interface CloudCollection {
+  collection: string;
+  shard: string;
+  name: string;
+  points: number;
+  segments: number;
+  disk_bytes: number;
+  manifest_hash: string;
+}
+
+export interface CloudCollectionsResponse {
+  backend: "qdrant-server" | "embedded-edge";
+  url: string | null;
+  total_points: number;
+  collections: CloudCollection[];
+}
+
+export interface CloudPoint {
+  id: string;
+  slug?: string | null;
+  text?: string | null;
+  domain?: string | null;
+  criticality?: string | null;
+  sensitivity?: string | null;
+  origin_device?: string | null;
+  sync_state?: string | null;
+  asset_id?: string | null;
+  title?: string | null;
+  updated_at?: number | null;
+  score?: number | null;
+}
+
+export interface CloudPointsResponse {
+  collection: string;
+  shard: string;
+  query: string;
+  total: number;
+  points: CloudPoint[];
+}
+
+export interface CloudSearchResponse {
+  collection: string;
+  shard: string;
+  mode: string;
+  points: CloudPoint[];
+}
+
+export interface CloudDeleteResponse {
+  ok: boolean;
+  point_id: string;
+}
+
+// ---------------------------------------------------------------------------
+// snapshot handoff (export from one device, import on another)
+// ---------------------------------------------------------------------------
+export interface SnapshotShards {
+  [shard: string]: Record<string, unknown>[];
+}
+
+export interface SnapshotExport {
+  format: "edge-mem-snapshot";
+  version: number;
+  device: DeviceId;
+  exported_at: number;
+  shards: SnapshotShards;
+  point_count: number;
+  excluded_local_only: number;
+}
+
+export interface SnapshotImportResult {
+  ok: boolean;
+  reason?: string;
+  imported?: number;
+  skipped?: number;
+  source_device?: DeviceId;
+  shards?: Record<string, number>;
+}
+
+// ---------------------------------------------------------------------------
+// TTL retention of raw telemetry
+// ---------------------------------------------------------------------------
+export interface RetentionStatus {
+  device?: DeviceId;
+  shard?: string;
+  expired?: number;
+  checked?: number;
+  expired_total?: number;
+  last_run: number | null;
+  ttl_seconds: number;
+  ok?: boolean;
+}

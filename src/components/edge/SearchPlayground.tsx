@@ -2,14 +2,14 @@
 
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { Search, Zap, Wifi, WifiOff, Sparkles, Quote, Cloud, Save, Loader2, GitCompare, Copy, Clock } from "lucide-react";
+import { Search, Zap, Wifi, WifiOff, Sparkles, Quote, Cloud, Save, Loader2, GitCompare, Copy, Clock, ListFilter, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import type { EdgeHook } from "@/hooks/use-edge";
-import type { SearchMode, SearchResponse } from "@/lib/edge-types";
+import type { SearchMode, SearchResponse, SearchFilterKey, SearchFilters, SearchResult } from "@/lib/edge-types";
 import { Panel, LatencyBadge, CriticalityBadge, formatRelative } from "./edge-ui";
 
 const SHARDS = ["manuals", "incidents", "sensors"] as const;
@@ -18,6 +18,15 @@ const MODES: { id: SearchMode; label: string; desc: string }[] = [
   { id: "dense", label: "Dense", desc: "FastEmbed semantic" },
   { id: "sparse", label: "Sparse", desc: "BM25 keyword" },
 ];
+
+// payload filters pushed down into the Qdrant filter (AND-combined server-side)
+const FILTER_DEFS: { key: SearchFilterKey; label: string; options: string[] }[] = [
+  { key: "domain", label: "Domain", options: ["manual", "incident", "sensor", "log"] },
+  { key: "criticality", label: "Criticality", options: ["low", "medium", "high", "critical"] },
+  { key: "sensitivity", label: "Sensitivity", options: ["public", "internal", "restricted"] },
+  { key: "origin_device", label: "Origin", options: [] }, // filled from the live fleet below
+];
+const NO_FILTERS: SearchFilters = { domain: "", criticality: "", sensitivity: "", origin_device: "" };
 
 const EXAMPLES = [
   { q: "vibration outer race bearing defect", shard: "incidents" },
@@ -39,6 +48,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
   const [compare, setCompare] = useState<Record<string, SearchResponse> | null>(null);
   const [comparing, setComparing] = useState(false);
   const [recent, setRecent] = useState<{ q: string; shard: string; mode: SearchMode; ts: number }[]>([]);
+  const [filters, setFilters] = useState<SearchFilters>(NO_FILTERS);
   const online = edge.syncStatus?.online ?? true;
 
   // load recent searches from localStorage on mount
@@ -64,6 +74,12 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
     );
   }
 
+  function activeFilters(f: SearchFilters): SearchFilters {
+    const out: SearchFilters = {};
+    for (const [k, v] of Object.entries(f)) if (v) out[k as SearchFilterKey] = v;
+    return out;
+  }
+
   async function run(q?: string) {
     const text = (q ?? query).trim();
     if (!text) {
@@ -74,7 +90,8 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
     setRunning(true);
     setCompare(null);
     try {
-      const r = await edge.search(text, shard, mode, limit);
+      const active = activeFilters(filters);
+      const r = await edge.search(text, shard, mode, limit, { filters: active, explain: true });
       setRes(r);
       addRecent(text);
     } catch (e) {
@@ -238,8 +255,47 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
             <input
               type="range" min={1} max={10} value={limit}
               onChange={(e) => setLimit(Number(e.target.value))}
+              aria-label="Maximum results"
               className="mt-2 w-full accent-emerald-500"
             />
+          </div>
+        </div>
+
+        {/* filters — AND-combined payload constraints evaluated by Qdrant */}
+        <div className="mt-3">
+          <div className="mb-1.5 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+              <ListFilter className="h-3 w-3" /> Filters
+            </div>
+            {Object.values(filters).some(Boolean) && (
+              <button
+                onClick={() => setFilters(NO_FILTERS)}
+                className="flex items-center gap-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground/60 hover:text-foreground"
+              >
+                <X className="h-2.5 w-2.5" /> clear all
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {FILTER_DEFS.map((f) => {
+              const opts = f.key === "origin_device"
+                ? (edge.state?.devices ?? []).map((d) => d.id)
+                : f.options;
+              return (
+                <div key={f.key}>
+                  <Label className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">{f.label}</Label>
+                  <select
+                    value={filters[f.key] ?? ""}
+                    onChange={(e) => setFilters((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                    aria-label={`${f.label} filter`}
+                    className="mt-1 w-full rounded-md border border-border bg-card/40 px-2 py-1.5 font-mono text-[11px] text-foreground focus:border-emerald-500/40 focus:outline-none"
+                  >
+                    <option value="">any</option>
+                    {opts.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -329,7 +385,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
                 return (
                   <div
                     key={r.id}
-                    onClick={() => edge.openPoint({ id: r.id, shard: res.shard, ...r })}
+                    onClick={() => edge.openPoint({ ...r, shard: res.shard })}
                     className="group cursor-pointer rounded-lg border border-border bg-card/40 p-3.5 transition-colors hover:border-emerald-500/30 hover:bg-card/60"
                   >
                     <div className="flex items-start gap-3">
@@ -366,6 +422,11 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
                             Distill → SOP
                           </button>
                         </div>
+                        {r.scores && (
+                          <div className="mt-2 rounded border border-border/60 bg-background/40 px-2 py-1.5" data-testid="score-breakdown">
+                            <ScoreBreakdown rows={res.results} current={r} />
+                          </div>
+                        )}
                         {distilled[r.id] && (
                           <div className="mt-2 rounded-md border border-sky-500/25 bg-sky-500/5 p-2.5">
                             <div className="mb-1 flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-wider text-sky-300">
@@ -461,6 +522,39 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
           </div>
         </Panel>
       )}
+    </div>
+  );
+}
+
+/** Per-channel contribution to the fused score. Each channel normalizes
+ *  against its own max across the result set — dense (cosine) and sparse
+ *  (BM25) live on different scales, so a shared axis would mislead. */
+function ScoreBreakdown({ rows, current }: { rows: SearchResult[]; current: SearchResult }) {
+  const s = current.scores;
+  if (!s) return null;
+  const maxOf = (k: "dense" | "sparse" | "fused") =>
+    Math.max(1e-9, ...rows.map((r) => r.scores?.[k] ?? 0));
+  const chans = [
+    { key: "dense" as const, label: "dense", value: s.dense, max: maxOf("dense"), bar: "bg-sky-400" },
+    { key: "sparse" as const, label: "sparse", value: s.sparse, max: maxOf("sparse"), bar: "bg-amber-400" },
+    { key: "fused" as const, label: "fused", value: s.fused, max: maxOf("fused"), bar: "bg-emerald-400" },
+  ];
+  return (
+    <div className="grid grid-cols-3 gap-2" aria-label="score breakdown">
+      {chans.map((c) => (
+        <div key={c.key}>
+          <div className="flex items-baseline justify-between font-mono text-[9px]">
+            <span className="uppercase tracking-wider text-muted-foreground">{c.label}</span>
+            <span className="tabular-nums text-foreground">{c.value === null ? "n/a" : c.value.toFixed(3)}</span>
+          </div>
+          <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted">
+            <div
+              className={cn("h-full rounded-full", c.bar)}
+              style={{ width: `${c.value === null ? 0 : Math.max(4, Math.round((c.value / c.max) * 100))}%` }}
+            />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

@@ -287,7 +287,7 @@ export default function PointDetailDrawer({
                   {group.results.map((r) => (
                     <button
                       key={r.id}
-                      onClick={(e) => { e.stopPropagation(); edge.openPoint({ id: r.id, shard: group.shard, ...r }); }}
+                      onClick={(e) => { e.stopPropagation(); edge.openPoint({ ...r, shard: group.shard }); }}
                       className="block w-full rounded-md border border-border bg-background/40 p-2 text-left transition-colors hover:border-emerald-500/30 hover:bg-background/60"
                     >
                       <div className="flex items-center justify-between gap-2">

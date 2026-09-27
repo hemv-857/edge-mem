@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { edge } from "@/lib/edge-api";
 import type {
   EdgeState, SyncStatus, MemoryStats, FleetOverview, ActivityEntry,
-  SearchResponse, SearchMode, Policy,
+  SearchResponse, SearchMode, SearchFilters, Policy,
 } from "@/lib/edge-types";
 
 const SNAP_INTERVAL = 4500;   // state + syncStatus + memory + fleet
@@ -29,6 +29,12 @@ export interface PointRef {
   severity?: string;
 }
 
+export interface SearchOpts {
+  filters?: SearchFilters;
+  /** ask the engine for per-channel (dense/sparse) scores alongside the fused score */
+  explain?: boolean;
+}
+
 export interface EdgeHook {
   state: EdgeState | null;
   syncStatus: SyncStatus | null;
@@ -47,7 +53,7 @@ export interface EdgeHook {
   toggleConnectivity: () => Promise<void>;
   setOnline: (online: boolean) => Promise<void>;
   write: (p: Parameters<typeof edge.write>[0]) => Promise<void>;
-  search: (q: string, shard: string, mode: SearchMode, limit?: number) => Promise<SearchResponse>;
+  search: (q: string, shard: string, mode: SearchMode, limit?: number, opts?: SearchOpts) => Promise<SearchResponse>;
   resolveConflict: (conflictId: string, resolution: "local" | "remote" | "merge", mergedText?: string) => Promise<void>;
   demoConflict: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -150,8 +156,11 @@ export function useEdge(): EdgeHook {
     return setOnline(next);
   }, [syncStatus, setOnline]);
   const write = useCallback((p: Parameters<typeof edge.write>[0]) => run("write", () => edge.write({ ...p, device: activeRef.current }).then(() => undefined)), [run]);
-  const search = useCallback((q: string, shard: string, mode: SearchMode, limit = 5) =>
-    run("search", () => edge.search({ device: activeRef.current, shard, query: q, mode, limit })), [run]);
+  const search = useCallback((q: string, shard: string, mode: SearchMode, limit = 5, opts?: SearchOpts) =>
+    run("search", () => edge.search({
+      device: activeRef.current, shard, query: q, mode, limit,
+      filters: opts?.filters, explain: opts?.explain,
+    })), [run]);
   const resolveConflict = useCallback((conflictId: string, resolution: "local" | "remote" | "merge", mergedText?: string) =>
     run("resolve", () => edge.resolveConflict(activeRef.current, conflictId, resolution, mergedText).then(() => undefined)), [run]);
   const demoConflict = useCallback(() => run("demo", () => edge.demoConflict(activeRef.current).then(() => undefined)), [run]);

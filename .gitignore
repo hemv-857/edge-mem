@@ -3,6 +3,8 @@
 # dependencies
 node_modules
 /.pnp
+.venv/
+.pytest_cache/
 .pnp.*
 .yarn/*
 !.yarn/patches
@@ -51,3 +53,12 @@ prompt
 server.log
 # Skills directory
 /skills/
+# python bytecode (edge-engine runs on the local interpreter)
+__pycache__/
+*.pyc
+# qdrant server runtime (binary + storage) bootstrapped by start.sh
+/.qdrant/
+# e2e audit screenshot artifacts — tests/audit/audit.py is the durable artifact
+tests/audit/shots/
+# device-beta peer runtime spawned by mini-services/edge-engine/start.sh
+mini-services/edge-engine/data-beta/

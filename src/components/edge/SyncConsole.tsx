@@ -2,13 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { RefreshCw, DownloadCloud, ArrowUp, ArrowDown, AlertTriangle, Check, GitMerge, FileText, Network, Zap, HardDrive, History, Cloud, Cpu, Timer } from "lucide-react";
+import { Loader2, RefreshCw, DownloadCloud, ArrowUp, ArrowDown, AlertTriangle, Check, GitMerge, FileText, Network, Zap, HardDrive, History, Cloud, Cpu, Timer, Download, Upload, Package } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/hooks/use-toast";
 import type { EdgeHook } from "@/hooks/use-edge";
-import type { Conflict, ActivityEntry } from "@/lib/edge-types";
+import type { Conflict, ActivityEntry, SnapshotImportResult } from "@/lib/edge-types";
+import { edge as edgeApi } from "@/lib/edge-api";
 import { Panel, StatCard, formatBytes, formatRelative, formatTime } from "./edge-ui";
 
 export default function SyncConsole({ edge }: { edge: EdgeHook }) {
@@ -66,6 +67,7 @@ export default function SyncConsole({ edge }: { edge: EdgeHook }) {
             value={intervalSec}
             onChange={(e) => setIntervalSec(Number(e.target.value))}
             disabled={!autoSync}
+            aria-label="Auto-sync interval"
             className="h-7 rounded border border-border bg-card/50 px-1.5 font-mono text-[10px] text-foreground disabled:opacity-50"
           >
             <option value={15}>15s</option>
@@ -76,6 +78,7 @@ export default function SyncConsole({ edge }: { edge: EdgeHook }) {
           <Switch
             checked={autoSync}
             onCheckedChange={setAutoSync}
+            aria-label="Auto-sync when connectivity returns"
             className="data-[state=checked]:bg-emerald-500"
           />
         </div>
@@ -191,7 +194,7 @@ export default function SyncConsole({ edge }: { edge: EdgeHook }) {
             <div className="mt-3">
               <div className="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Resolved</div>
               <div className="space-y-1">
-                {(ss.resolved_conflicts ?? []).slice(-4).map((c) => (
+                {(ss?.resolved_conflicts ?? []).slice(-4).map((c) => (
                   <div key={c.id} className="flex items-center gap-2 rounded border border-emerald-500/20 bg-emerald-500/5 px-2 py-1.5 font-mono text-[10px]">
                     <Check className="h-3 w-3 text-emerald-400" />
                     <span className="text-foreground">{c.slug}</span>
@@ -204,9 +207,114 @@ export default function SyncConsole({ edge }: { edge: EdgeHook }) {
         </Panel>
       </div>
 
+      {/* Snapshot handoff — export a device's memory, carry it to another device */}
+      <SnapshotHandoff edge={edge} />
+
       {/* Sync History Timeline — visual timeline of past sync/bootstrap/connectivity events */}
       <SyncHistoryTimeline activity={edge.activity} />
     </div>
+  );
+}
+
+/** Cross-device snapshot handoff: export a portable JSON snapshot from the
+ *  active device, carry it over any channel, import it on the target device.
+ *  Restricted (local_only) points are stripped server-side and never leave. */
+function SnapshotHandoff({ edge }: { edge: EdgeHook }) {
+  const [busy, setBusy] = useState<"export" | "import" | null>(null);
+  const [last, setLast] = useState<SnapshotImportResult | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function doExport() {
+    setBusy("export");
+    try {
+      const snap = await edgeApi.exportSnapshot();
+      const blob = new Blob([JSON.stringify(snap, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `edge-snapshot-${snap.device}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({
+        title: "Snapshot exported",
+        description: `${snap.point_count} points${snap.excluded_local_only ? ` · ${snap.excluded_local_only} restricted held back` : ""}`,
+      });
+    } catch (e) {
+      toast({ title: "Export failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function doImport(file: File) {
+    setBusy("import");
+    try {
+      const snap = JSON.parse(await file.text()) as unknown;
+      const r = await edgeApi.importSnapshot({ snapshot: snap as never });
+      if (!r.ok) throw new Error(r.reason || "rejected");
+      setLast(r);
+      await edge.refresh();
+      toast({
+        title: "Snapshot imported",
+        description: `${r.imported} points${r.source_device ? ` from ${r.source_device}` : ""}${r.skipped ? ` · ${r.skipped} skipped` : ""}`,
+      });
+    } catch (e) {
+      toast({ title: "Import failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
+    } finally {
+      setBusy(null);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  return (
+    <Panel
+      title="Snapshot Handoff"
+      desc="Carry a device's memory to another device over any channel — export to a file, import on the target."
+      right={<Package className="h-3.5 w-3.5 text-muted-foreground" />}
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="flex-1 rounded-lg border border-border bg-card/40 p-3">
+          <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            <Download className="h-3 w-3" /> 1 · export
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            Snapshot the active device's knowledge. Restricted <span className="font-mono text-amber-300">local_only</span> points are stripped before they leave the device.
+          </p>
+          <Button size="sm" variant="outline" onClick={doExport} disabled={busy !== null}
+            className="mt-2 gap-1.5 font-mono text-xs" data-testid="snapshot-export">
+            {busy === "export" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+            Export snapshot
+          </Button>
+        </div>
+
+        <div className="flex-1 rounded-lg border border-border bg-card/40 p-3">
+          <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            <Upload className="h-3 w-3" /> 2 · import
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            Load a snapshot onto the active device. Authorship (<span className="font-mono">origin_device</span>) and timestamps are preserved, so a sync raises no false conflict.
+          </p>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            aria-label="Import snapshot file"
+            data-testid="snapshot-import-input"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void doImport(f); }}
+            className="mt-2 block w-full font-mono text-[10px] text-muted-foreground file:mr-2 file:cursor-pointer file:rounded file:border file:border-border file:bg-card file:px-2 file:py-1 file:font-mono file:text-[11px] file:text-foreground"
+          />
+        </div>
+      </div>
+
+      {last && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2 font-mono text-[11px] text-emerald-300">
+          <Check className="h-3.5 w-3.5" />
+          <span>imported {last.imported} points from {last.source_device}</span>
+          <span className="text-muted-foreground">{Object.entries(last.shards ?? {}).map(([k, v]) => `${k}: ${v}`).join(" · ")}</span>
+          {last.skipped ? <span className="text-amber-300">{last.skipped} skipped</span> : null}
+        </div>
+      )}
+    </Panel>
   );
 }
 

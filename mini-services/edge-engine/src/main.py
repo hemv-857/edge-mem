@@ -14,6 +14,7 @@ All endpoints live under /api/edge and are reached via ?XTransformPort=3030.
 from __future__ import annotations
 
 import json
+import os
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -24,7 +25,8 @@ import embed
 import engine as E
 import seed as S
 
-PORT = 3030
+PORT = int(os.environ.get("EDGE_PORT", "3030"))
+BIND = "0.0.0.0"   # not loopback-only: another host must be able to reach us
 _started_at = time.time()
 
 print("[edge-engine] booting — creating Fleet on main thread...", flush=True)
@@ -34,6 +36,7 @@ try:
 except Exception:
     pass
 S.seed_fleet(fleet)
+S.seed_devices(fleet, fleet.active_device)
 print(f"[edge-engine] ready. devices={list(fleet.devices)} "
       f"cloud_points={fleet.cloud.memory_stats()['total_points']}", flush=True)
 
@@ -57,6 +60,8 @@ def h_health(body, qs):
         "engine": "qdrant_edge (EdgeShard) + FastEmbed + BM25",
         "dense_model": embed.DENSE_MODEL, "dense_dim": embed.DENSE_DIM,
         "runtime": "single-threaded http.server (main thread)",
+        "retention_interval_s": RETENTION_INTERVAL,
+        "bind": BIND,
     }
 
 def h_state(body, qs):
@@ -64,10 +69,7 @@ def h_state(body, qs):
              "technician": d.technician, "online": d.online, "live": True,
              "total_points": d.memory_stats()["total_points"]}
             for d in fleet.devices.values()]
-    remote = [{"id": m["id"], "name": m["name"], "location": m["location"],
-               "technician": m["technician"], "online": True, "live": False,
-               "kind": m["kind"], "total_points": 0}
-              for m in fleet.remote_members]
+    remote = [fleet.remote_member_entry(m) for m in fleet.remote_members]
     return 200, {"active_device": fleet.active_device, "devices": live + remote,
                  "cloud": fleet.cloud.memory_stats(), "policy": fleet.policy,
                  "shard_defs": E.SHARD_DEFS}
@@ -111,7 +113,9 @@ def h_search(body, qs):
     try:
         return 200, fleet.search(body.get("device") or fleet.active_device,
                                  body.get("shard", "incidents"), body.get("query", ""),
-                                 body.get("mode", "hybrid"), int(body.get("limit", 5)))
+                                 body.get("mode", "hybrid"), int(body.get("limit", 5)),
+                                 filters=body.get("filters") or {},
+                                 explain=bool(body.get("explain")))
     except ValueError as e:
         return 400, {"error": str(e)}
 
@@ -196,6 +200,107 @@ def h_active(body, qs):
     return 200, {"active_device": dev}
 
 
+# ---------------------------------------------------------------------------
+# cloud collections browser (the centralized knowledge base, made operable)
+# ---------------------------------------------------------------------------
+COLLECTION_PREFIX = "edge-"
+CLOUD_FIELDS = ("slug", "text", "domain", "criticality", "sensitivity",
+                "origin_device", "sync_state", "asset_id", "title", "updated_at")
+
+
+def _shard_for(name: str) -> Optional[str]:
+    shard = (name or "").strip()
+    if shard.startswith(COLLECTION_PREFIX):
+        shard = shard[len(COLLECTION_PREFIX):]
+    return shard if shard in E.SHARD_DEFS else None
+
+
+def _cloud_view(p: Dict[str, Any], score: Optional[float] = None) -> Dict[str, Any]:
+    row = {"id": p.get("_id") or p.get("id"), "score": score}
+    row.update({k: p.get(k) for k in CLOUD_FIELDS})
+    return row
+
+
+def h_cloud_collections(body, qs):
+    ms = fleet.cloud.memory_stats()
+    url = getattr(fleet.cloud, "url", None)
+    cols = [{"collection": f"{COLLECTION_PREFIX}{k}", "shard": k, **v}
+            for k, v in ms["shards"].items()]
+    return 200, {"backend": "qdrant-server" if url else "embedded-edge",
+                 "url": url, "total_points": ms["total_points"],
+                 "collections": cols}
+
+
+def h_cloud_points(body, qs):
+    shard = _shard_for(qs.get("collection", ["edge-incidents"])[0])
+    if not shard:
+        return 400, {"error": "unknown collection"}
+    limit = min(int(qs.get("limit", ["50"])[0]), 500)
+    q = (qs.get("q", [""])[0] or "").strip()
+    if q:
+        hits = fleet.cloud.search(shard, qs.get("mode", ["hybrid"])[0], q, limit=limit)
+        return 200, {"collection": f"{COLLECTION_PREFIX}{shard}", "shard": shard, "query": q,
+                     "total": len(hits), "points": [_cloud_view(h, h.get("score")) for h in hits]}
+    pts = fleet.cloud.all_points(shard)
+    return 200, {"collection": f"{COLLECTION_PREFIX}{shard}", "shard": shard, "query": "",
+                 "total": len(pts), "points": [_cloud_view(p) for p in pts[:limit]]}
+
+
+def h_cloud_search(body, qs):
+    shard = _shard_for(body.get("collection") or "")
+    if not shard:
+        return 400, {"error": "unknown collection"}
+    hits = fleet.cloud.search(shard, body.get("mode", "hybrid"),
+                              body.get("query", ""), int(body.get("limit", 10)))
+    fleet.log(fleet.active_device, "search",
+              f"CLOUD {body.get('mode', 'hybrid')} search on {shard}: '{body.get('query', '')[:40]}' → {len(hits)} hits",
+              {"shard": shard, "cloud": True})
+    return 200, {"collection": f"{COLLECTION_PREFIX}{shard}", "shard": shard,
+                 "mode": body.get("mode", "hybrid"), "points": hits}
+
+
+def h_cloud_delete(body, qs):
+    shard = _shard_for(body.get("collection") or "")
+    pid = body.get("id")
+    if not shard or not pid:
+        return 400, {"error": "collection and id required"}
+    ok = fleet.cloud.delete_point(shard, str(pid))
+    if ok:
+        fleet._invalidate_contrib()
+        fleet.log(fleet.active_device, "delete",
+                  f"Deleted point {str(pid)[:12]}… from cloud collection edge-{shard}",
+                  {"shard": shard, "point_id": pid, "scope": "cloud"})
+    return 200, {"ok": ok, "point_id": pid}
+
+
+# ---------------------------------------------------------------------------
+# snapshot handoff + TTL retention
+# ---------------------------------------------------------------------------
+def h_snapshot_export(body, qs):
+    return 200, fleet.export_snapshot(_device_id(body, qs))
+
+
+def h_snapshot_import(body, qs):
+    snap = body.get("snapshot")
+    if isinstance(snap, str):
+        try:
+            snap = json.loads(snap)
+        except json.JSONDecodeError:
+            return 400, {"ok": False, "reason": "snapshot is not valid JSON"}
+    if not isinstance(snap, dict):
+        return 400, {"ok": False, "reason": "snapshot object required"}
+    res = fleet.import_snapshot(_device_id(body, qs), snap)
+    return (200 if res.get("ok") else 400), res
+
+
+def h_retention_run(body, qs):
+    return 200, fleet.run_retention(_device_id(body, qs))
+
+
+def h_retention_status(body, qs):
+    return 200, fleet.retention_status()
+
+
 # route table: (method, path) -> handler
 ROUTES: Dict[tuple, Callable] = {
     ("GET",  "/api/edge/health"):           h_health,
@@ -218,6 +323,14 @@ ROUTES: Dict[tuple, Callable] = {
     ("PUT",  "/api/edge/policy"):           h_put_policy,
     ("POST", "/api/edge/policy/simulate"):  h_simulate_policy,
     ("POST", "/api/edge/active"):           h_active,
+    ("GET",  "/api/edge/cloud/collections"): h_cloud_collections,
+    ("GET",  "/api/edge/cloud/points"):      h_cloud_points,
+    ("POST", "/api/edge/cloud/search"):      h_cloud_search,
+    ("POST", "/api/edge/cloud/delete"):      h_cloud_delete,
+    ("POST", "/api/edge/snapshot/export"):   h_snapshot_export,
+    ("POST", "/api/edge/snapshot/import"):   h_snapshot_import,
+    ("POST", "/api/edge/retention/run"):     h_retention_run,
+    ("GET",  "/api/edge/retention/status"):  h_retention_status,
 }
 
 
@@ -289,17 +402,44 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
+# Background TTL retention. Runs from EdgeHTTPServer.service_actions(), i.e. on
+# the main thread *between* request batches — no worker thread, so the
+# qdrant_edge binding still only ever sees one thread (see module docstring).
+# 0 disables the ticker; sweeps are still available on demand via
+# POST /api/edge/retention/run.
+RETENTION_INTERVAL = max(0, int(os.environ.get("EDGE_RETENTION_INTERVAL", "15")))
+_next_retention_at = time.time() + RETENTION_INTERVAL
+
+
+def retention_tick() -> None:
+    global _next_retention_at
+    now = time.time()
+    if not RETENTION_INTERVAL or now < _next_retention_at:
+        return
+    _next_retention_at = now + RETENTION_INTERVAL
+    try:
+        res = fleet.run_retention()
+        if res.get("expired"):
+            print(f"[edge-engine] TTL sweep: expired {res['expired']}/{res['checked']} "
+                  f"raw sensor point(s)", flush=True)
+    except Exception:  # noqa: BLE001 — a failed sweep must never kill the server
+        traceback.print_exc()
+
+
 class EdgeHTTPServer(HTTPServer):
     # Larger listen backlog so the single-threaded server doesn't refuse
     # connections while busy on a slow request (sync/bootstrap/embed).
     request_queue_size = 128
     allow_reuse_address = True
 
+    def service_actions(self) -> None:
+        retention_tick()
+
 
 def main():
-    server = EdgeHTTPServer(("0.0.0.0", PORT), Handler)
+    server = EdgeHTTPServer((BIND, PORT), Handler)
     server.socket.setsockopt(__import__("socket").IPPROTO_TCP, __import__("socket").TCP_NODELAY, 1)
-    print(f"[edge-engine] listening on http://0.0.0.0:{PORT} (single-threaded, main thread, backlog=128)", flush=True)
+    print(f"[edge-engine] listening on http://{BIND}:{PORT} (single-threaded, main thread, backlog=128)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

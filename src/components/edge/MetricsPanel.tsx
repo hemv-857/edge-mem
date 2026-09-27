@@ -1,13 +1,18 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { useEffect, useRef, useState } from "react";
 import {
   LineChart, Zap, Activity as ActivityIcon, Search, Database,
   RefreshCw, Cloud, TrendingUp, Clock, Cpu, ArrowUpRight, ArrowDownRight, Gauge, Download,
+  Radio, Timer, Trash2,
 } from "lucide-react";
 import type { EdgeHook } from "@/hooks/use-edge";
-import type { ActivityEntry } from "@/lib/edge-types";
-import { Panel, StatCard } from "./edge-ui";
+import type { ActivityEntry, RetentionStatus } from "@/lib/edge-types";
+import { edge as edgeApi } from "@/lib/edge-api";
+import { toast } from "@/hooks/use-toast";
+import { Button } from "@/components/ui/button";
+import { Panel, StatCard, formatRelative } from "./edge-ui";
 
 export default function MetricsPanel({ edge }: { edge: EdgeHook }) {
   const activity = edge.activity;
@@ -64,6 +69,9 @@ export default function MetricsPanel({ edge }: { edge: EdgeHook }) {
           icon={<ActivityIcon className="h-4 w-4" />}
         />
       </div>
+
+      {/* live metrics — pushed over SSE rather than polled */}
+      <LiveMetricsPanel />
 
       <div className="grid gap-5 lg:grid-cols-3">
         {/* latency chart */}
@@ -204,6 +212,9 @@ export default function MetricsPanel({ edge }: { edge: EdgeHook }) {
         <Panel title="System Health" desc="Aggregate edge intelligence score">
           <SystemHealth ss={ss} memory={memory} searchSamples={searchSamples} />
         </Panel>
+
+        {/* TTL retention of raw telemetry */}
+        <RetentionPanel edge={edge} />
       </div>
 
       {/* engine info */}
@@ -220,6 +231,156 @@ export default function MetricsPanel({ edge }: { edge: EdgeHook }) {
         </div>
       </Panel>
     </div>
+  );
+}
+
+interface LiveSnap {
+  ts: number;
+  local_points: number;
+  cloud_points: number;
+  devices: number;
+  federated_reachable: number;
+  queue_depth: number;
+  open_conflicts: number;
+}
+
+/** Live metric readouts fed by the SSE relay at /api/edge/stream.
+ *  Falls back to the last snapshot (stale badge) if the stream drops. */
+function LiveMetricsPanel() {
+  const [snap, setSnap] = useState<LiveSnap | null>(null);
+  const [conn, setConn] = useState<"connecting" | "live" | "stale">("connecting");
+  const esRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof EventSource === "undefined") {
+      // no EventSource (SSR / old browser) — flip to stale on the next tick
+      const id = setTimeout(() => setConn("stale"), 0);
+      return () => clearTimeout(id);
+    }
+    const es = new EventSource("/api/edge/stream");
+    esRef.current = es;
+    es.addEventListener("metrics", (ev) => {
+      try {
+        setSnap(JSON.parse((ev as MessageEvent).data) as LiveSnap);
+        setConn("live");
+      } catch {
+        /* ignore malformed frame */
+      }
+    });
+    es.onerror = () => setConn("stale");
+    return () => {
+      es.close();
+      esRef.current = null;
+    };
+  }, []);
+
+  const cells = [
+    { label: "local pts", value: snap?.local_points, accent: "text-foreground" },
+    { label: "cloud pts", value: snap?.cloud_points, accent: "text-emerald-400" },
+    { label: "devices", value: snap === null ? null : snap.devices, accent: "text-foreground" },
+    { label: "peers up", value: snap?.federated_reachable, accent: "text-violet-300" },
+    { label: "queue", value: snap?.queue_depth, accent: (snap?.queue_depth ?? 0) > 0 ? "text-amber-400" : "text-foreground" },
+    { label: "conflicts", value: snap?.open_conflicts, accent: (snap?.open_conflicts ?? 0) > 0 ? "text-rose-400" : "text-foreground" },
+  ];
+
+  return (
+    <Panel
+      title="Live Metrics"
+      desc="Streamed from the engine over server-sent events — no client polling"
+      right={
+        <span
+          data-testid="sse-status"
+          data-conn={conn}
+          className={cn(
+            "flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider",
+            conn === "live" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+              : conn === "connecting" ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
+              : "border-border bg-muted/40 text-muted-foreground"
+          )}
+        >
+          <Radio className={cn("h-3 w-3", conn === "live" && "edge-pulse")} />
+          {conn === "live" ? "sse live" : conn === "connecting" ? "connecting" : "stale"}
+        </span>
+      }
+    >
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        {cells.map((c) => (
+          <div key={c.label} className="rounded-lg border border-border bg-card/40 px-3 py-2">
+            <div className="text-[9px] uppercase tracking-wider text-muted-foreground">{c.label}</div>
+            <div className={cn("mt-0.5 font-mono text-lg font-semibold tabular-nums", c.accent)}>
+              {c.value === null || c.value === undefined ? "—" : c.value}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] text-muted-foreground">
+        <span>source: <span className="text-foreground">/api/edge/stream</span></span>
+        <span>latest: <span className="text-foreground">{snap ? new Date(snap.ts).toLocaleTimeString() : "—"}</span></span>
+        <span>poll-free · 1s server tick</span>
+      </div>
+    </Panel>
+  );
+}
+
+/** TTL retention: expire raw telemetry older than policy.ttl_raw_sensor_seconds. */
+function RetentionPanel({ edge }: { edge: EdgeHook }) {
+  const ttl = edge.state?.policy.ttl_raw_sensor_seconds ?? 600;
+  const [status, setStatus] = useState<RetentionStatus | null>(null);
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    edgeApi.retentionStatus().then(setStatus).catch(() => undefined);
+  }, [edge.activity.length]);
+
+  async function run() {
+    setRunning(true);
+    try {
+      const r = await edgeApi.runRetention();
+      setStatus(r);
+      await edge.refresh();
+      toast({
+        title: r.expired ? "Retention sweep complete" : "Retention sweep — nothing expired",
+        description: `${r.expired} of ${r.checked} raw sensor points older than ${r.ttl_seconds}s removed`,
+      });
+    } catch (e) {
+      toast({ title: "Retention failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <Panel
+      title="TTL Retention"
+      desc={`Raw telemetry older than ${ttl}s is dropped from the sensors shard`}
+      right={<Timer className="h-3.5 w-3.5 text-muted-foreground" />}
+    >
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <div className="rounded-lg border border-border bg-card/40 px-3 py-2">
+          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">ttl</div>
+          <div className="mt-0.5 font-mono text-lg font-semibold tabular-nums text-foreground">{ttl}s</div>
+        </div>
+        <div className="rounded-lg border border-border bg-card/40 px-3 py-2">
+          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">expired (total)</div>
+          <div className={cn("mt-0.5 font-mono text-lg font-semibold tabular-nums", (status?.expired_total ?? 0) > 0 ? "text-amber-400" : "text-foreground")}>
+            {status?.expired_total ?? "—"}
+          </div>
+        </div>
+        <div className="col-span-2 rounded-lg border border-border bg-card/40 px-3 py-2 sm:col-span-1">
+          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">last run</div>
+          <div className="mt-0.5 truncate font-mono text-sm text-foreground">{formatRelative(status?.last_run ?? null)}</div>
+        </div>
+      </div>
+      <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+        The <span className="font-mono text-emerald-300">sensors</span> shard is the raw firehose — everything in it is subject to the TTL.
+        Distilled knowledge in manuals/incidents is never swept.
+      </p>
+      <Button size="sm" variant="outline" onClick={run} disabled={running}
+        className="mt-3 gap-1.5 font-mono text-xs" data-testid="retention-run">
+        {running ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+        Run retention sweep
+      </Button>
+    </Panel>
   );
 }
 

@@ -5,11 +5,10 @@ Grounded in the real Qdrant Edge API (qdrant_edge.EdgeShard):
   local semantic memory — fully in-process, like SQLite for vectors.
 - Dense vectors from FastEmbed (CPU) + sparse BM25 vectors -> on-device hybrid
   retrieval with zero network calls.
-- A co-located set of EdgeShards represents the centralized Qdrant Server
-  knowledge ("the cloud"). We are transparent about this: the sandbox cannot
-  run a separate Qdrant server, so the cloud is an EdgeShard in the same process.
-  The sync mechanics (manifest-diff pull, dual-write push queue, conflict
-  detection) are real and operate on real vector points.
+- The centralized cloud is a real Qdrant Server reached over HTTP (see
+  cloud_qdrant.py). When no server is reachable it degrades to a co-located set
+  of EdgeShards in this process, so the sync mechanics (manifest-diff pull,
+  dual-write push queue, conflict detection) stay real either way.
 """
 from __future__ import annotations
 
@@ -30,11 +29,13 @@ from qdrant_edge import (
 )
 
 import embed
+from cloud_qdrant import build_cloud_store
 
 DENSE_DIM = embed.DENSE_DIM
 SPARSE_NAME = embed.SPARSE_NAME
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+DATA_DIR = os.environ.get("EDGE_DATA_DIR",
+                          os.path.join(os.path.dirname(__file__), "..", "data"))
 CLOUD_DIR = os.path.join(DATA_DIR, "cloud")
 
 # Knowledge domains = separate EdgeShards so each can have its own
@@ -45,16 +46,29 @@ SHARD_DEFS = {
     "sensors":   {"desc": "Live sensor readings & raw telemetry","default_sync": "local_only"},
 }
 
-DEVICE_DEFS = [
-    {"id": "device-alpha", "name": "Alpha — Field Unit 01", "location": "Plant A — North Wing", "technician": "R. Okafor"},
+# The full fleet roster. Each engine instance hosts exactly one member
+# (EDGE_DEVICE) and knows the others as remote members; members listed in
+# FEDERATED_PEERS ("device-beta=http://localhost:3031,device-gamma=...") are
+# probed over HTTP so the fleet panel shows live numbers instead of a stub.
+FLEET_DEFS = [
+    {"id": "device-alpha", "name": "Alpha — Field Unit 01",   "location": "Plant A — North Wing", "technician": "R. Okafor",    "kind": "unit"},
+    {"id": "device-beta",  "name": "Beta — Robotic Inspector", "location": "Plant B — Cell 3",    "technician": "auto (robot)", "kind": "robot"},
+    {"id": "device-gamma", "name": "Gamma — Kiosk Terminal",   "location": "Plant C — Lobby",     "technician": "K. Mendoza",   "kind": "kiosk"},
 ]
 
-# Remote fleet members: their knowledge lives in the cloud (origin_device tag).
-# They appear in the fleet dashboard with their contributed points + simulated
-# sync health, but hold no live local shards in this process (memory budget).
+PEERS: Dict[str, str] = {}
+for _pair in os.environ.get("FEDERATED_PEERS", "").split(","):
+    if "=" in _pair:
+        _pid, _purl = _pair.split("=", 1)
+        PEERS[_pid.strip()] = _purl.strip().rstrip("/")
+
+HOSTED_IDS = [d.strip() for d in os.environ.get("EDGE_DEVICE", "device-alpha").split(",") if d.strip()] or ["device-alpha"]
+DEVICE_DEFS = [d for d in FLEET_DEFS if d["id"] in HOSTED_IDS] or [FLEET_DEFS[0]]
+
+# Remote members = everyone we don't host ourselves.
 REMOTE_MEMBERS = [
-    {"id": "device-beta",  "name": "Beta — Robotic Inspector", "location": "Plant B — Cell 3",   "technician": "auto (robot)", "kind": "robot",     "last_sync_offset_min": 47},
-    {"id": "device-gamma", "name": "Gamma — Kiosk Terminal",  "location": "Plant C — Lobby",    "technician": "K. Mendoza",   "kind": "kiosk",     "last_sync_offset_min": 12},
+    {**m, "url": PEERS.get(m["id"]), "last_sync_offset_min": 47 if m["id"] == "device-beta" else 12}
+    for m in FLEET_DEFS if m["id"] not in HOSTED_IDS
 ]
 
 # ---------------------------------------------------------------------------
@@ -83,6 +97,21 @@ def evaluate_policy(point_meta: Dict[str, Any], policy: Dict[str, Any]) -> Dict[
         if rule["op"] == "in" and val in rule.get("values", []):
             return {"sync_state": rule["action"], "matched_rule": rule["id"], "reason": rule["reason"]}
     return {"sync_state": "queued", "matched_rule": None, "reason": "Default: queue for opportunistic sync"}
+
+
+FILTERABLE_KEYS = ("domain", "criticality", "sensitivity", "origin_device", "sync_state", "asset_id")
+
+
+def build_filter(filters: Optional[Dict[str, Any]]) -> Optional[Filter]:
+    """Turn {key: value} query constraints into a Qdrant filter. Values must be
+    non-empty strings — empty/None entries are ignored so the UI can send its
+    whole form state."""
+    if not filters:
+        return None
+    conds = [FieldCondition(key=k, match=MatchValue(value=str(filters[k])))
+             for k in FILTERABLE_KEYS
+             if filters.get(k) not in (None, "", [])]
+    return Filter(must=conds) if conds else None
 
 
 # ---------------------------------------------------------------------------
@@ -143,12 +172,10 @@ class ShardStore:
         # NOTE: order_by on a payload field requires a range index which EdgeShard
         # cannot create at runtime, so we scroll in internal order and sort by
         # updated_at in Python (cheap for edge-scale collections).
+        # with_payload=True: full payloads (the cloud browser + snapshot export
+        # need every key; payloads are edge-scale so bandwidth is not a concern).
         recs, nxt = self.shard.scroll(ScrollRequest(
-            offset=offset, limit=limit, filter=flt,
-            with_payload=PayloadSelector.Include([
-                "slug","text","domain","criticality","sensitivity","origin_device",
-                "updated_at","sync_state","asset_id","severity","sensor_type","value","unit","title",
-            ]),
+            offset=offset, limit=limit, filter=flt, with_payload=True,
         ))
         return recs, nxt
 
@@ -180,11 +207,11 @@ class ShardStore:
         sparse = embed.embed_sparse_query(query)
         if mode == "dense":
             req = QueryRequest(limit=limit, query=Query.Nearest(dense, using=""),
-                               with_payload=PayloadSelector.Include(["slug","text","domain","criticality","origin_device","asset_id","title","updated_at"]),
+                               with_payload=PayloadSelector.Include(["slug","text","domain","criticality","sensitivity","sync_state","origin_device","asset_id","title","updated_at"]),
                                filter=flt)
         elif mode == "sparse":
             req = QueryRequest(limit=limit, query=Query.Nearest(sparse, using=SPARSE_NAME),
-                               with_payload=PayloadSelector.Include(["slug","text","domain","criticality","origin_device","asset_id","title","updated_at"]),
+                               with_payload=PayloadSelector.Include(["slug","text","domain","criticality","sensitivity","sync_state","origin_device","asset_id","title","updated_at"]),
                                filter=flt)
         else:  # hybrid
             req = QueryRequest(
@@ -194,7 +221,7 @@ class ShardStore:
                     Prefetch(limit=max(limit * 4, 20), query=Query.Nearest(sparse, using=SPARSE_NAME)),
                 ],
                 query=Fusion.Rrf(k=2),
-                with_payload=PayloadSelector.Include(["slug","text","domain","criticality","origin_device","asset_id","title","updated_at"]),
+                with_payload=PayloadSelector.Include(["slug","text","domain","criticality","sensitivity","sync_state","origin_device","asset_id","title","updated_at"]),
                 filter=flt,
             )
         results = self.shard.query(req)
@@ -423,6 +450,13 @@ class CloudStore:
                 break
         return out
 
+    # -- admin surface used by the Cloud Collections browser --
+    def search(self, shard: str, mode: str, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        return self.shards[shard].search(mode, query, limit=limit)
+
+    def delete_point(self, shard: str, point_id: str) -> bool:
+        return self.shards[shard].delete_point(point_id)
+
 
 # ---------------------------------------------------------------------------
 # fleet manager
@@ -432,7 +466,7 @@ class Fleet:
     def __init__(self):
         os.makedirs(DATA_DIR, exist_ok=True)
         self.policy = json.loads(json.dumps(DEFAULT_POLICY))
-        self.cloud = CloudStore()
+        self.cloud = build_cloud_store(CloudStore, list(SHARD_DEFS))
         self.devices: Dict[str, Device] = {}
         for d in DEVICE_DEFS:
             self.devices[d["id"]] = Device(d)
@@ -442,10 +476,64 @@ class Fleet:
         self._lock = threading.RLock()
         self._contrib_cache: Optional[Dict[str, int]] = None
         self._contrib_ts: float = 0.0
+        # live peer snapshots, cached so a polled fleet panel doesn't hammer a
+        # peer that is down (a refused connection is cheap, a timeout is not)
+        self._peer_cache: Dict[str, Tuple[float, Optional[Dict[str, Any]]]] = {}
+        self._peer_ttl = 4.0
+        self._retention = {"expired_total": 0, "last_run": None, "ttl_seconds": None}
         self._load_activity()
 
     def _invalidate_contrib(self):
         self._contrib_cache = None
+
+    # -- federation: live peers ------------------------------------------
+    def _peer_overview(self, url: str) -> Optional[Dict[str, Any]]:
+        """GET <peer>/api/edge/fleet, cached for _peer_ttl seconds.
+        Returns the peer's own live device entry, or None when unreachable."""
+        now = time.time()
+        hit = self._peer_cache.get(url)
+        if hit and (now - hit[0]) < self._peer_ttl:
+            return hit[1]
+        data: Optional[Dict[str, Any]] = None
+        try:
+            import urllib.request
+            with urllib.request.urlopen(f"{url}/api/edge/fleet", timeout=1.5) as resp:
+                payload = json.loads(resp.read().decode() or "{}")
+            data = next((d for d in payload.get("devices", []) if d.get("live")), None)
+        except Exception:
+            data = None
+        self._peer_cache[url] = (now, data)
+        return data
+
+    def remote_member_entry(self, m: Dict[str, Any]) -> Dict[str, Any]:
+        """Fleet row for a member we do not host. With a URL we show its real
+        numbers; without one we fall back to the static record."""
+        url = m.get("url")
+        entry = {
+            "id": m["id"], "name": m["name"], "location": m["location"],
+            "technician": m["technician"], "online": True, "active": False,
+            "live": False, "kind": m["kind"], "federated": bool(url),
+            "reachable": False, "total_points": 0, "queue_depth": 0,
+            "open_conflicts": 0, "bytes_pushed": 0, "bytes_pulled": 0,
+            "last_sync_at": int(time.time() * 1000) - m.get("last_sync_offset_min", 30) * 60000,
+            "cloud_contributed": self._cloud_contrib_by_origin().get(m["id"], 0),
+            "shards": [],
+        }
+        if url:
+            live = self._peer_overview(url)
+            if live:
+                entry.update({
+                    "reachable": True,
+                    "online": bool(live.get("online", True)),
+                    "total_points": live.get("total_points", 0),
+                    "queue_depth": live.get("queue_depth", 0),
+                    "open_conflicts": live.get("open_conflicts", 0),
+                    "last_sync_at": live.get("last_sync_at") or entry["last_sync_at"],
+                    "bytes_pushed": live.get("bytes_pushed", 0),
+                    "bytes_pulled": live.get("bytes_pulled", 0),
+                    "shards": live.get("shards", []),
+                })
+        return entry
 
     def _cloud_contrib_by_origin(self) -> Dict[str, int]:
         """Count cloud points per origin_device (for remote fleet members).
@@ -499,13 +587,16 @@ class Fleet:
             return list(reversed(items[-limit:]))
 
     # -- write --
-    def write_point(self, device_id: str, shard: str, payload: Dict[str, Any], text: Optional[str] = None) -> Dict[str, Any]:
+    def write_point(self, device_id: str, shard: str, payload: Dict[str, Any],
+                    text: Optional[str] = None, point_id: Optional[str] = None,
+                    origin_device: Optional[str] = None,
+                    updated_at: Optional[int] = None) -> Dict[str, Any]:
         dev = self.devices[device_id]
         if shard not in dev.shards:
             raise ValueError(f"unknown shard {shard}")
         text = text if text is not None else payload.get("text", "")
         slug = payload.get("slug") or f"{device_id}-{int(time.time()*1000)}-{uuid.uuid4().hex[:6]}"
-        point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, slug))
+        point_id = point_id or str(uuid.uuid5(uuid.NAMESPACE_URL, slug))
         now = int(time.time() * 1000)
         # tag on write
         meta = {
@@ -518,7 +609,10 @@ class Fleet:
         full_payload.update({
             "slug": slug, "text": text, "domain": meta["domain"],
             "criticality": meta["criticality"], "sensitivity": meta["sensitivity"],
-            "origin_device": device_id, "updated_at": now,
+            # provenance/timestamp are caller-supplied on snapshot import so a
+            # handoff keeps the original authorship instead of re-stamping it
+            "origin_device": origin_device or device_id,
+            "updated_at": now if updated_at is None else updated_at,
             "sync_state": decision["sync_state"],
         })
         dense = embed.embed_dense(text)
@@ -746,6 +840,103 @@ class Fleet:
             "resolved_conflicts": [c for c in dev.conflicts if c["status"] == "resolved"],
         }
 
+    # -- snapshot handoff (device -> file -> another device) --
+    def export_snapshot(self, device_id: str) -> Dict[str, Any]:
+        """Portable snapshot of a device's memory. Vectors are omitted — the
+        importer re-embeds from text — and local_only points are excluded so an
+        export can never carry restricted data off the device."""
+        dev = self.devices[device_id]
+        out: Dict[str, Any] = {
+            "format": "edge-mem-snapshot", "version": 1, "device": device_id,
+            "exported_at": int(time.time() * 1000), "shards": {}, "excluded_local_only": 0,
+        }
+        for name, st in dev.shards.items():
+            rows: List[Dict[str, Any]] = []
+            offset = None
+            while True:
+                recs, offset = st.scroll(limit=200, offset=offset)
+                for r in recs:
+                    p = dict(r.payload or {})
+                    if p.get("sync_state") == "local_only":
+                        out["excluded_local_only"] += 1
+                        continue
+                    p["_id"] = str(r.id)
+                    rows.append(p)
+                if not offset:
+                    break
+            out["shards"][name] = rows
+        out["point_count"] = sum(len(v) for v in out["shards"].values())
+        self.log(device_id, "snapshot",
+                 f"Exported snapshot — {out['point_count']} points ({out['excluded_local_only']} restricted held back)",
+                 {"points": out["point_count"]})
+        return out
+
+    def import_snapshot(self, device_id: str, snap: Dict[str, Any]) -> Dict[str, Any]:
+        """Load a snapshot onto a device. Reuses write_point so policy tagging,
+        queueing and logging behave exactly as for a locally authored note."""
+        if not isinstance(snap, dict) or snap.get("format") != "edge-mem-snapshot":
+            return {"ok": False, "reason": "not an edge-mem snapshot"}
+        imported = skipped = 0
+        seen: Dict[str, int] = {}
+        for shard, rows in (snap.get("shards") or {}).items():
+            if shard not in SHARD_DEFS:
+                skipped += len(rows)
+                continue
+            for p in rows:
+                pid = p.get("_id") or p.get("point_id") or p.get("id")
+                text = p.get("text", "")
+                if not pid or not text:
+                    skipped += 1
+                    continue
+                body = {k: v for k, v in p.items() if k not in ("_id", "point_id", "id", "text")}
+                ua = p.get("updated_at")
+                self.write_point(device_id, shard, body, text=text, point_id=str(pid),
+                                 origin_device=p.get("origin_device"),
+                                 updated_at=ua if isinstance(ua, int) else None)
+                imported += 1
+                seen[shard] = seen.get(shard, 0) + 1
+        self._invalidate_contrib()
+        return {"ok": True, "imported": imported, "skipped": skipped,
+                "source_device": snap.get("device"), "shards": seen}
+
+    # -- TTL retention --
+    def run_retention(self, device_id: Optional[str] = None) -> Dict[str, Any]:
+        """Expire raw telemetry older than policy.ttl_raw_sensor_seconds.
+        The sensors EdgeShard *is* the raw firehose, so everything in it is
+        subject to the TTL; distilled knowledge lives in the other shards."""
+        dev = self.devices[device_id or self.active_device]
+        # ponytail: full-shard scroll sweep, no scheduler — runs on demand from
+        # POST /api/edge/retention/run (or the Metrics button). Add a background
+        # ticker only if expiring stale telemetry between manual runs matters.
+        ttl_s = int(self.policy.get("ttl_raw_sensor_seconds", 600))
+        ttl_ms = ttl_s * 1000
+        now = int(time.time() * 1000)
+        st = dev.shards["sensors"]
+        expired = checked = 0
+        offset = None
+        while True:
+            recs, offset = st.scroll(limit=200, offset=offset)
+            for r in recs:
+                checked += 1
+                if now - int((r.payload or {}).get("updated_at", 0)) > ttl_ms:
+                    if st.delete_point(str(r.id)):
+                        expired += 1
+            if not offset:
+                break
+        if expired:
+            st.optimize(); st.flush()
+        self._retention = {"expired_total": self._retention.get("expired_total", 0) + expired,
+                           "last_run": now, "ttl_seconds": ttl_s}
+        if expired:
+            self.log(dev.id, "retention",
+                     f"TTL sweep expired {expired} raw sensor point(s) older than {ttl_s}s",
+                     {"expired": expired, "checked": checked, "ttl_seconds": ttl_s})
+        return {"ok": True, "device": dev.id, "shard": "sensors", "expired": expired,
+                "checked": checked, "ttl_seconds": ttl_s, **self._retention}
+
+    def retention_status(self) -> Dict[str, Any]:
+        return dict(self._retention, ttl_seconds=int(self.policy.get("ttl_raw_sensor_seconds", 600)))
+
     def fleet_overview(self) -> Dict[str, Any]:
         contrib = self._cloud_contrib_by_origin()
         devices = []
@@ -763,37 +954,42 @@ class Fleet:
                 "cloud_contributed": contrib.get(did, 0),
                 "shards": list(ms["shards"].values()),
             })
-        # remote members (no live shards)
-        import time as _t
+        # remote members: live probe when federated, static record otherwise
         for m in self.remote_members:
-            devices.append({
-                "id": m["id"], "name": m["name"], "location": m["location"],
-                "technician": m["technician"], "online": True,
-                "active": False, "live": False, "kind": m["kind"],
-                "total_points": 0, "queue_depth": 0, "open_conflicts": 0,
-                "last_sync_at": int(_t.time() * 1000) - m["last_sync_offset_min"] * 60000,
-                "bytes_pushed": 0, "bytes_pulled": 0,
-                "cloud_contributed": contrib.get(m["id"], 0),
-                "shards": [],
-            })
+            devices.append(self.remote_member_entry(m))
         cloud = self.cloud.memory_stats()
         return {"devices": devices, "cloud": cloud, "active_device": self.active_device}
 
-    def search(self, device_id: str, shard: str, query: str, mode: str = "hybrid", limit: int = 5) -> Dict[str, Any]:
+    def search(self, device_id: str, shard: str, query: str, mode: str = "hybrid",
+               limit: int = 5, filters: Optional[Dict[str, Any]] = None,
+               explain: bool = False) -> Dict[str, Any]:
         dev = self.devices[device_id]
         st = dev.shards.get(shard)
         if not st:
             raise ValueError("unknown shard")
+        flt = build_filter(filters)
+        active = [k for k in FILTERABLE_KEYS if filters.get(k) not in (None, "")]
         t0 = time.perf_counter()
-        results = st.search(mode, query, limit=limit)
+        results = st.search(mode, query, limit=limit, flt=flt)
+        if explain:
+            # two extra single-mode passes so the UI can show dense vs sparse
+            # contribution next to the fused RRF score
+            n = max(limit * 3, 15)
+            dense = {r["id"]: r["score"] for r in st.search("dense", query, limit=n, flt=flt)}
+            sparse = {r["id"]: r["score"] for r in st.search("sparse", query, limit=n, flt=flt)}
+            for r in results:
+                r["scores"] = {"dense": dense.get(r["id"]), "sparse": sparse.get(r["id"]),
+                               "fused": r["score"]}
         ms = (time.perf_counter() - t0) * 1000
         self.log(device_id, "search",
                  f"{'OFFLINE' if not dev.online else 'online'} {mode} search on {shard}: '{query[:40]}' → {len(results)} hits in {ms:.1f}ms",
                  {"shard": shard, "mode": mode, "latency_ms": round(ms, 2), "hits": len(results),
-                  "offline": not dev.online})
+                  "offline": not dev.online, "filters": active})
         return {
             "results": results, "latency_ms": round(ms, 2),
             "offline": not dev.online, "mode": mode, "shard": shard,
+            "filters": {k: filters[k] for k in active},
+            "explained": bool(explain),
         }
 
     def get_point(self, device_id: str, shard: str, point_id: str) -> Optional[Dict[str, Any]]:

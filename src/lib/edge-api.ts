@@ -1,8 +1,10 @@
 // Typed client for the edge-engine mini-service (port 3030).
 // All requests go through the gateway via ?XTransformPort=3030 (relative path).
 import type {
-  EdgeState, MemoryStats, SearchResponse, SearchMode, WriteResult,
+  EdgeState, MemoryStats, SearchResponse, SearchMode, SearchFilters, WriteResult,
   SyncStatus, FleetOverview, ActivityEntry, Policy, Conflict,
+  CloudCollectionsResponse, CloudPointsResponse, CloudSearchResponse, CloudDeleteResponse,
+  SnapshotExport, SnapshotImportResult, RetentionStatus,
 } from "./edge-types";
 
 const EDGE_PORT = 3030;
@@ -67,8 +69,10 @@ export const edge = {
     edgeGet<Record<string, unknown>>("point", { shard, id, device }),
   deletePoint: (shard: string, id: string, device?: string) =>
     edgePost<{ ok: boolean; reason?: string }>("point/delete", { shard, id, device }),
-  search: (p: { device?: string; shard: string; query: string; mode?: SearchMode; limit?: number }) =>
-    edgePost<SearchResponse>("search", p),
+  search: (p: {
+    device?: string; shard: string; query: string; mode?: SearchMode; limit?: number;
+    filters?: SearchFilters; explain?: boolean;
+  }) => edgePost<SearchResponse>("search", p),
   write: (p: {
     device?: string; shard: string; text: string; slug?: string; domain?: string;
     criticality?: string; sensitivity?: string; asset_id?: string; title?: string;
@@ -88,6 +92,24 @@ export const edge = {
   simulatePolicy: (p: { text: string; criticality: string; sensitivity: string; domain: string }) =>
     edgePost<{ decision: { sync_state: string; matched_rule: string | null; reason: string }; trace: Array<{ id: string; field: string; op: string; value?: string; values?: string[]; point_value: string; matched: boolean; action: string; reason: string; is_match: boolean }>; point_meta: Record<string, string> }>("policy/simulate", p),
   setActive: (device: string) => edgePost<{ active_device: string }>("active", { device }),
+
+  // -- cloud collections browser (reads straight from Qdrant Server) --
+  cloudCollections: () => edgeGet<CloudCollectionsResponse>("cloud/collections"),
+  cloudPoints: (p: { collection: string; q?: string; mode?: SearchMode; limit?: number }) =>
+    edgeGet<CloudPointsResponse>("cloud/points", p),
+  cloudSearch: (p: { collection: string; query: string; mode?: SearchMode; limit?: number }) =>
+    edgePost<CloudSearchResponse>("cloud/search", p),
+  cloudDelete: (p: { collection: string; id: string }) =>
+    edgePost<CloudDeleteResponse>("cloud/delete", p),
+
+  // -- snapshot handoff --
+  exportSnapshot: (device?: string) => edgePost<SnapshotExport>("snapshot/export", { device }),
+  importSnapshot: (p: { device?: string; snapshot: SnapshotExport | string }) =>
+    edgePost<SnapshotImportResult>("snapshot/import", p),
+
+  // -- TTL retention of raw telemetry --
+  retentionStatus: () => edgeGet<RetentionStatus>("retention/status"),
+  runRetention: (device?: string) => edgePost<RetentionStatus>("retention/run", { device }),
 };
 
 export type EdgeApi = typeof edge;

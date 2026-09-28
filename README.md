@@ -99,12 +99,20 @@ Everything except distill/auto-tag works with no LLM and no network.
 | `EDGE_TOKEN` | unset | Shared secret required as `X-Edge-Token` on every engine route but `/health`. Set the same value for both engines and the Next.js server |
 | `EDGE_BIND` | `0.0.0.0` | Engine bind address — use `127.0.0.1` when you don't federate across hosts |
 | `EDGE_PORTS` | `3030,3031` | Ports the Next.js proxy may forward `XTransformPort` to |
+| `EDGE_ALLOWED_HOSTS` | unset | Extra `Host` names/IPs (comma list, no port) the engine accepts besides `localhost`, `127.0.0.1`, `[::1]` and `EDGE_BIND` |
 
 The engine binds `0.0.0.0` (reported as `bind` in `/api/edge/health`) so a peer
 is reachable from another host. On anything but a trusted network set
-`EDGE_TOKEN` (and/or `EDGE_BIND=127.0.0.1`). The engine sends no CORS headers and
-only accepts `application/json` bodies, so other websites can't drive it from a
-browser. See `docs/PRD.md` for the full security model.
+`EDGE_TOKEN` (and/or `EDGE_BIND=127.0.0.1`). The engine sends no CORS headers,
+only accepts `application/json` bodies, and answers every route but `/health`
+with 403 unless the `Host` header is loopback, `EDGE_BIND` or listed in
+`EDGE_ALLOWED_HOSTS`, so other websites can't drive it from a browser even via
+DNS rebinding. If you reach an engine by a LAN name or IP (a cross-host peer
+probed at `http://192.168.1.50:3031`, or Caddy forwarding the browser's `Host`),
+add that name to `EDGE_ALLOWED_HOSTS` on that engine. The engine also drops
+connections idle for 10 s, and a policy update is rejected unless the first rule
+a `restricted` note can match keeps it `local_only`. See `docs/PRD.md` for the
+full security model.
 
 ## Testing
 

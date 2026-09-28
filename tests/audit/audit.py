@@ -93,7 +93,10 @@ def audit_feasibility(page: Page) -> None:
     check("feasibility", "edge-engine reachable without Caddy", r.ok and r.json().get("ok") is True, f"status {r.status}")
 
     r2 = page.request.get(f"{BASE}/api/edge/health?XTransformPort=3999")
-    check("feasibility", "gateway rejects unreachable engine", r2.status in (502, 504), f"status {r2.status}")
+    check("feasibility", "gateway refuses non-engine ports", r2.status == 403, f"status {r2.status}")
+
+    r4 = page.request.get(f"{BASE}/api/edge/..%2F..%2Fhealth?XTransformPort=3030")
+    check("feasibility", "gateway rejects path traversal", r4.status in (400, 404), f"status {r4.status}")
 
     r3 = page.request.get(f"{BASE}/api/edge/health")
     check("feasibility", "missing XTransformPort → 400", r3.status == 400, f"status {r3.status}")

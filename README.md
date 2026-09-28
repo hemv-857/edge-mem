@@ -96,10 +96,15 @@ Everything except distill/auto-tag works with no LLM and no network.
 | `FEDERATED_PEERS` | `device-beta=http://localhost:3031` | `name=url` pairs the fleet probes live |
 | `QDRANT_URL` | `http://localhost:6333` | Cloud backend; falls back to an embedded store when unreachable |
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | OpenAI | Cloud synthesis only |
+| `EDGE_TOKEN` | unset | Shared secret required as `X-Edge-Token` on every engine route but `/health`. Set the same value for both engines and the Next.js server |
+| `EDGE_BIND` | `0.0.0.0` | Engine bind address — use `127.0.0.1` when you don't federate across hosts |
+| `EDGE_PORTS` | `3030,3031` | Ports the Next.js proxy may forward `XTransformPort` to |
 
 The engine binds `0.0.0.0` (reported as `bind` in `/api/edge/health`) so a peer
-is reachable from another host — there is no auth on the engine, so bind it
-behind a firewall or a reverse proxy on anything untrusted.
+is reachable from another host. On anything but a trusted network set
+`EDGE_TOKEN` (and/or `EDGE_BIND=127.0.0.1`). The engine sends no CORS headers and
+only accepts `application/json` bodies, so other websites can't drive it from a
+browser. See `docs/PRD.md` for the full security model.
 
 ## Testing
 

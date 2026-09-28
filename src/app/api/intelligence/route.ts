@@ -16,6 +16,7 @@ export const dynamic = "force-dynamic";
 
 const BASE_URL = (process.env.LLM_BASE_URL ?? "https://api.openai.com/v1").replace(/\/+$/, "");
 const MODEL = process.env.LLM_MODEL ?? "gpt-4o-mini";
+const MAX_TEXT = 8000;
 
 type Body =
   | { action: "distill_sop"; text: string; asset_id?: string }
@@ -33,7 +34,11 @@ async function chat(messages: Msg[]): Promise<string> {
     body: JSON.stringify({ model: MODEL, messages, stream: false }),
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`LLM request failed: ${res.status} ${await res.text()}`);
+  // provider bodies can echo request details; log them server-side, don't return them
+  if (!res.ok) {
+    console.error("[intelligence] LLM error", res.status, (await res.text()).slice(0, 500));
+    throw new Error(`LLM request failed: ${res.status}`);
+  }
 
   const data = (await res.json()) as {
     choices?: { message?: { content?: string } }[];
@@ -55,6 +60,8 @@ export async function POST(req: Request) {
 
   const text = (body?.text ?? "").trim();
   if (!text) return NextResponse.json({ error: "text required" }, { status: 400 });
+  // unauthenticated route in front of a paid API key — bound the spend per call
+  if (text.length > MAX_TEXT) return NextResponse.json({ error: `text over ${MAX_TEXT} chars` }, { status: 413 });
 
   try {
     if (body.action === "distill_sop") {

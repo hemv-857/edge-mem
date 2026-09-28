@@ -9,6 +9,7 @@ export const runtime = "nodejs";
 
 const ENGINE = process.env.EDGE_URL ?? "http://localhost:3030";
 const TICK_MS = 1000;
+const HEADERS: HeadersInit = process.env.EDGE_TOKEN ? { "x-edge-token": process.env.EDGE_TOKEN } : {};
 
 interface Snapshot {
   ts: number;
@@ -27,8 +28,8 @@ interface EngineState {
 
 async function snap(): Promise<Snapshot> {
   const [st, ss] = await Promise.all([
-    fetch(`${ENGINE}/api/edge/state`, { cache: "no-store" }).then((r) => r.json() as Promise<EngineState>),
-    fetch(`${ENGINE}/api/edge/sync-status`, { cache: "no-store" }).then((r) => r.json() as Promise<{ queue_depth?: number; open_conflicts?: unknown[] }>),
+    fetch(`${ENGINE}/api/edge/state`, { cache: "no-store", headers: HEADERS }).then((r) => r.json() as Promise<EngineState>),
+    fetch(`${ENGINE}/api/edge/sync-status`, { cache: "no-store", headers: HEADERS }).then((r) => r.json() as Promise<{ queue_depth?: number; open_conflicts?: unknown[] }>),
   ]);
   const devices = st.devices ?? [];
   return {

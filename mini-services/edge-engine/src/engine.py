@@ -497,7 +497,9 @@ class Fleet:
         data: Optional[Dict[str, Any]] = None
         try:
             import urllib.request
-            with urllib.request.urlopen(f"{url}/api/edge/fleet", timeout=1.5) as resp:
+            req = urllib.request.Request(f"{url}/api/edge/fleet",
+                                         headers={"X-Edge-Token": os.environ.get("EDGE_TOKEN", "")})
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
                 payload = json.loads(resp.read().decode() or "{}")
             data = next((d for d in payload.get("devices", []) if d.get("live")), None)
         except Exception:

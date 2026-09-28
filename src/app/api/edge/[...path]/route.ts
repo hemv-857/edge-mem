@@ -10,27 +10,38 @@ import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-const PORT = /^\d{2,5}$/;
+// Only the edge engines may be reached — without this list the proxy is an open
+// SSRF relay to every localhost service (e.g. Qdrant's unauthenticated :6333).
+const ALLOWED_PORTS = new Set((process.env.EDGE_PORTS ?? "3030,3031").split(",").map((p) => p.trim()));
+const TOKEN = process.env.EDGE_TOKEN;
 
 async function proxy(req: Request, method: string, path: string[]) {
   const url = new URL(req.url);
   const port = url.searchParams.get("XTransformPort");
-  if (!port || !PORT.test(port)) {
+  if (!port) {
     return NextResponse.json(
       { error: "XTransformPort query param required (e.g. ?XTransformPort=3030)" },
       { status: 400 },
     );
   }
+  if (!ALLOWED_PORTS.has(port)) {
+    return NextResponse.json({ error: `port ${port} is not an edge engine` }, { status: 403 });
+  }
+  // `..` would let fetch() normalise the target out of /api/edge/
+  if (path.some((seg) => seg === ".." || seg === "." || seg.includes("/") || seg.includes("\\"))) {
+    return NextResponse.json({ error: "invalid path" }, { status: 400 });
+  }
 
   url.searchParams.delete("XTransformPort");
   const target = `http://127.0.0.1:${port}/api/edge/${path.join("/")}${url.search}`;
 
-  const init: RequestInit = { method, headers: { accept: "application/json" } };
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (TOKEN) headers["x-edge-token"] = TOKEN;
+  const init: RequestInit = { method, headers };
   if (method !== "GET" && method !== "HEAD") {
-    init.headers = {
-      ...init.headers,
-      "content-type": req.headers.get("content-type") ?? "application/json",
-    };
+    // forwarded as-is: the engine rejects non-JSON bodies, which is what stops
+    // a cross-site <form>/text/plain POST from driving it
+    headers["content-type"] = req.headers.get("content-type") ?? "";
     init.body = await req.text();
   }
 

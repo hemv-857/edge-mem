@@ -13,6 +13,7 @@ All endpoints live under /api/edge and are reached via ?XTransformPort=3030.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import time
@@ -26,7 +27,11 @@ import engine as E
 import seed as S
 
 PORT = int(os.environ.get("EDGE_PORT", "3030"))
-BIND = "0.0.0.0"   # not loopback-only: another host must be able to reach us
+BIND = os.environ.get("EDGE_BIND", "0.0.0.0")   # 0.0.0.0: a peer on another host must reach us
+# Shared secret for everything except /health. Unset = open (local dev only);
+# set it on every engine + the Next.js server whenever the bind is reachable.
+TOKEN = os.environ.get("EDGE_TOKEN", "")
+MAX_BODY = 8 * 1024 * 1024   # snapshots are the largest legit body
 _started_at = time.time()
 
 print("[edge-engine] booting — creating Fleet on main thread...", flush=True)
@@ -157,7 +162,41 @@ def h_activity(body, qs):
 def h_get_policy(body, qs):
     return 200, fleet.policy
 
+POLICY_FIELDS = {"sensitivity", "criticality", "domain"}
+POLICY_ACTIONS = {"local_only", "queued", "sync_now"}
+
+
+def validate_policy(p) -> Optional[str]:
+    """A malformed policy would crash evaluate_policy on every write, so reject it here."""
+    if not isinstance(p, dict) or not isinstance(p.get("rules"), list):
+        return "policy.rules must be a list"
+    ttl = p.get("ttl_raw_sensor_seconds")
+    if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl < 0:
+        return "ttl_raw_sensor_seconds must be a non-negative integer"
+    for r in p["rules"]:
+        if not isinstance(r, dict) or not isinstance(r.get("id"), str):
+            return "every rule needs a string id"
+        if r.get("field") not in POLICY_FIELDS:
+            return f"rule {r['id']}: field must be one of {sorted(POLICY_FIELDS)}"
+        if r.get("action") not in POLICY_ACTIONS:
+            return f"rule {r['id']}: action must be one of {sorted(POLICY_ACTIONS)}"
+        if r.get("op") == "eq":
+            if not isinstance(r.get("value"), str):
+                return f"rule {r['id']}: eq needs a string value"
+        elif r.get("op") == "in":
+            if not isinstance(r.get("values"), list) or not all(isinstance(v, str) for v in r["values"]):
+                return f"rule {r['id']}: in needs a list of strings"
+        else:
+            return f"rule {r['id']}: op must be eq or in"
+        if not isinstance(r.get("reason", ""), str):
+            return f"rule {r['id']}: reason must be a string"
+    return None
+
+
 def h_put_policy(body, qs):
+    err = validate_policy(body)
+    if err:
+        return 400, {"error": err}
     fleet.policy = body
     fleet.log("system", "policy", "Policy rules updated", {})
     return 200, fleet.policy
@@ -350,9 +389,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Connection", "close")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        # no Access-Control-Allow-Origin: the UI reaches us through the same-origin
+        # Next.js proxy, so no other website's JS gets to read or drive the engine
         self.end_headers()
         self.close_connection = True
         try:
@@ -364,15 +403,34 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
         qs = parse_qs(parsed.query)
+        if TOKEN and path != "/api/edge/health" and not hmac.compare_digest(
+                self.headers.get("X-Edge-Token", ""), TOKEN):
+            self._send(401, {"error": "missing or wrong X-Edge-Token"})
+            return
         body: dict = {}
         if method in ("POST", "PUT"):
-            length = int(self.headers.get("Content-Length", 0) or 0)
+            # JSON only: a cross-site <form> or text/plain fetch can't set this
+            # without a CORS preflight, which we never grant (CSRF guard).
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                self._send(415, {"error": "Content-Type must be application/json"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+            except ValueError:
+                length = -1
+            if length < 0 or length > MAX_BODY:
+                self._send(413, {"error": f"body must be 0..{MAX_BODY} bytes"})
+                return
             raw = self.rfile.read(length) if length else b""
             if raw:
                 try:
                     body = json.loads(raw)
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, UnicodeDecodeError):
                     self._send(400, {"error": "invalid JSON body"})
+                    return
+                if not isinstance(body, dict):
+                    self._send(400, {"error": "JSON body must be an object"})
                     return
         handler = ROUTES.get((method, path))
         if not handler:
@@ -394,12 +452,6 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  self._handle("GET")
     def do_POST(self): self._handle("POST")
     def do_PUT(self):  self._handle("PUT")
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
 
 
 # Background TTL retention. Runs from EdgeHTTPServer.service_actions(), i.e. on

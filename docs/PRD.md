@@ -1,0 +1,62 @@
+# EDGE.MEM — Product Requirements
+
+## Problem
+Field technicians at industrial sites (plants, rigs, substations) need past incidents,
+manuals and sensor context **while offline**. Cloud-only knowledge bases fail exactly when
+connectivity is worst, and some notes (personnel, contractor, restricted data) must never
+leave the device.
+
+## Users
+- **Field technician** — searches and writes notes on a device, often offline.
+- **Reliability engineer** — reviews synced incidents, distills them into SOPs.
+- **Site admin** — sets data-residency policy and manages the fleet.
+
+## Goals
+1. Hybrid (dense + BM25) search on-device, fully offline, single-digit ms p95.
+2. Policy-driven residency: every note is `local_only`, `queued` or `sync_now`.
+3. Edge ↔ cloud sync with explicit conflict cards — never silent overwrite.
+4. Federation across real device processes; peer-down state handled.
+5. Portable snapshot handoff between devices that preserves provenance.
+6. Optional cloud LLM for synthesis (SOP distill, auto-tag) — never required.
+
+## Non-goals
+- Multi-tenant SaaS, user accounts, per-user RBAC.
+- Running the engine on untrusted networks without `EDGE_TOKEN` + a firewall.
+
+## Features (shipped)
+| Tab | What |
+| --- | --- |
+| Overview | Fleet health, fleet-learning hero, demo walkthrough |
+| Memory | Shards, recent points, write form with live policy decision |
+| Search | dense / sparse / hybrid, filters, score breakdown, mode compare |
+| Sync | Online/offline toggle, queue, bootstrap, conflicts (local / remote / 3-way merge) |
+| Metrics | Live SSE fleet metrics, export |
+| Activity | Append-only log, search, export |
+| Cloud | Browse / search / delete Qdrant Server collections |
+| Policy | Rule table, TTL, simulate with decision trace |
+
+## Security requirements
+| # | Requirement | Status |
+| --- | --- | --- |
+| S1 | Proxy must not reach arbitrary local ports (SSRF) | Done — `EDGE_PORTS` allowlist, `..` rejected |
+| S2 | Other websites must not drive the engine from a user's browser (CSRF) | Done — no CORS, JSON-only POST/PUT |
+| S3 | Engine reachable on LAN must require auth | Done (opt-in) — `EDGE_TOKEN` |
+| S4 | Malformed policy must not break writes | Done — schema validation on PUT |
+| S5 | Bounded request size / LLM spend | Done — 8 MB body, 8000-char LLM input |
+| S6 | Standard browser hardening headers | Done — XFO, nosniff, referrer, permissions |
+| S7 | Restricted data never syncs | Enforced by policy r1 + audit |
+| S8 | Secrets never committed | Open — `.env` is tracked despite `.env*` ignore; keep keys out of it |
+| S9 | Auth for UI / role separation (admin vs technician) for policy + cloud delete | Open |
+| S10 | Snapshot import can set arbitrary `origin_device` (provenance spoofing) | Open — accepted for handoff; sign snapshots if it matters |
+
+## UX requirements
+- Every async action shows pending, success and failure states.
+- Offline is a first-class state, not an error.
+- Keyboard: ⌘K palette, Esc closes overlays; all controls reachable by Tab with visible focus.
+- Works at 375 px width without horizontal scroll.
+- Colour is never the only signal (badges carry text).
+
+## Success metrics
+- Audit green (all checks) in CI.
+- Offline hybrid search p95 < 10 ms on seed data.
+- Zero restricted points in cloud collections.

@@ -62,3 +62,6 @@ __pycache__/
 tests/audit/shots/
 # device-beta peer runtime spawned by mini-services/edge-engine/start.sh
 mini-services/edge-engine/data-beta/
+# pinned embedding model cache (embed.py) — downloaded, not committed
+mini-services/edge-engine/data/models/
+!.env.example

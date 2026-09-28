@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
@@ -27,6 +28,22 @@ SPARSE_NAME = embed.SPARSE_NAME
 COLLECTION_PREFIX = "edge-"
 DEFAULT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 DEFAULT_TIMEOUT = float(os.environ.get("QDRANT_TIMEOUT", "3"))
+
+
+def redact_url(url: str) -> str:
+    """Drop user:password@ so the URL is safe to log or return from the API."""
+    try:
+        u = urlsplit(url)
+    except ValueError:
+        return "<invalid url>"
+    if u.username is None and u.password is None:
+        return url
+    host = u.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    if u.port is not None:
+        host = f"{host}:{u.port}"
+    return urlunsplit((u.scheme, host, u.path, u.query, u.fragment))
 
 
 def _dir_size(path: str) -> int:
@@ -185,7 +202,7 @@ class QdrantCloudStore:
     def __init__(self, client: QdrantClient, url: str, shard_names: List[str],
                  storage_root: str = ""):
         self.client = client
-        self.url = url
+        self.url = redact_url(url)
         self.storage_root = storage_root
         self.shards: Dict[str, QdrantCloudShard] = {
             name: QdrantCloudShard(client, name, storage_root) for name in shard_names
@@ -253,10 +270,11 @@ def build_cloud_store(legacy_factory: Callable[[], Any], shard_names: List[str],
     """
     url = os.environ.get("QDRANT_URL", DEFAULT_URL)
     try:
-        client = QdrantClient(url=url, timeout=DEFAULT_TIMEOUT)
+        client = QdrantClient(url=url, timeout=DEFAULT_TIMEOUT,
+                              api_key=os.environ.get("QDRANT_API_KEY") or None)
         client.get_collections()
     except Exception as e:  # noqa: BLE001
-        log(f"[cloud] Qdrant Server unreachable at {url} ({type(e).__name__}) — "
+        log(f"[cloud] Qdrant Server unreachable at {redact_url(url)} ({type(e).__name__}) — "
             f"using embedded EdgeShard cloud")
         return legacy_factory()
     storage_root = os.environ.get("QDRANT_STORAGE", "")
@@ -265,5 +283,5 @@ def build_cloud_store(legacy_factory: Callable[[], Any], shard_names: List[str],
         _import_legacy(store, legacy_factory(), log)
     except Exception as e:  # noqa: BLE001
         log(f"[cloud] legacy import skipped: {e}")
-    log(f"[cloud] backed by Qdrant Server at {url}")
+    log(f"[cloud] backed by Qdrant Server at {store.url}")
     return store

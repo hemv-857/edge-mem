@@ -448,6 +448,10 @@ function WriteForm({ edge, shard }: { edge: EdgeHook; shard: string }) {
       toast({ title: "Enter text first", description: "Type the note text before auto-tagging.", variant: "destructive" });
       return;
     }
+    if (sensitivity === "restricted") {
+      toast({ title: "Auto-tag skipped", description: "Restricted notes never leave the device.", variant: "destructive" });
+      return;
+    }
     if (!online) {
       toast({ title: "Offline", description: "Cloud LLM auto-tag requires connectivity.", variant: "destructive" });
       return;
@@ -463,7 +467,8 @@ function WriteForm({ edge, shard }: { edge: EdgeHook; shard: string }) {
       const data = await r.json();
       if (!r.ok || !data.ok) throw new Error(data.error || "LLM failed");
       setCriticality(data.criticality);
-      setSensitivity(data.sensitivity);
+      // never lower a user-selected restricted (they may have switched while the call was in flight)
+      setSensitivity((prev) => (prev === "restricted" ? prev : data.sensitivity));
       setAutoTagReason(data.reason);
       toast({ title: "Auto-tagged by cloud LLM", description: `${data.criticality} · ${data.sensitivity} — ${data.reason}` });
     } catch (e) {
@@ -471,7 +476,7 @@ function WriteForm({ edge, shard }: { edge: EdgeHook; shard: string }) {
     } finally {
       setAutoTagging(false);
     }
-  }, [text, online]);
+  }, [text, online, sensitivity]);
 
   const handleWrite = useCallback(async () => {
     if (!canWrite) return;
@@ -521,8 +526,8 @@ function WriteForm({ edge, shard }: { edge: EdgeHook; shard: string }) {
         </div>
         <button
           onClick={handleAutoTag}
-          disabled={!online || autoTagging || !text.trim()}
-          title={online ? "Classify criticality & sensitivity via the cloud LLM" : "Cloud LLM requires connectivity"}
+          disabled={!online || autoTagging || !text.trim() || sensitivity === "restricted"}
+          title={sensitivity === "restricted" ? "Restricted notes never leave the device — cloud LLM auto-tag is disabled" : online ? "Classify criticality & sensitivity via the cloud LLM" : "Cloud LLM requires connectivity"}
           className={cn(
             "flex items-center gap-1 rounded border px-2 py-1 font-mono text-[9px] uppercase tracking-wider transition-colors disabled:opacity-40",
             online ? "border-sky-500/30 bg-sky-500/5 text-sky-300 hover:bg-sky-500/10" : "border-border text-muted-foreground"

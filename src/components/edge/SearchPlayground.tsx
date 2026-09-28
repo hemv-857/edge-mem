@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
+import { edge as edgeApi } from "@/lib/edge-api";
 import type { EdgeHook } from "@/hooks/use-edge";
 import type { SearchMode, SearchResponse, SearchFilterKey, SearchFilters, SearchResult } from "@/lib/edge-types";
 import { Panel, LatencyBadge, CriticalityBadge, formatRelative } from "./edge-ui";
@@ -26,6 +27,10 @@ const FILTER_DEFS: { key: SearchFilterKey; label: string; options: string[] }[] 
   { key: "sensitivity", label: "Sensitivity", options: ["public", "internal", "restricted"] },
   { key: "origin_device", label: "Origin", options: [] }, // filled from the live fleet below
 ];
+// restricted notes never leave the device — not even to the cloud LLM
+const isRestricted = (s: unknown) => String(s ?? "").trim().toLowerCase() === "restricted";
+const RESTRICTED_TIP = "Restricted notes never leave the device — cloud LLM distill is disabled";
+
 const NO_FILTERS: SearchFilters = { domain: "", criticality: "", sensitivity: "", origin_device: "" };
 
 const EXAMPLES = [
@@ -44,7 +49,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
   const [res, setRes] = useState<SearchResponse | null>(null);
   const [running, setRunning] = useState(false);
   const [distillId, setDistillId] = useState<string | null>(null);
-  const [distilled, setDistilled] = useState<Record<string, { sop: string; saving: boolean }>>({});
+  const [distilled, setDistilled] = useState<Record<string, { sop: string; saving: boolean; sensitivity: string }>>({});
   const [compare, setCompare] = useState<Record<string, SearchResponse> | null>(null);
   const [comparing, setComparing] = useState(false);
   const [recent, setRecent] = useState<{ q: string; shard: string; mode: SearchMode; ts: number }[]>([]);
@@ -130,13 +135,17 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
 
   // Cloud LLM: distill a retrieved incident into a reusable SOP update.
   // Only callable when online — reinforces the edge/cloud division of labor.
-  async function distill(id: string, text: string, asset_id?: string) {
+  async function distill(r0: SearchResult, shardName: string) {
+    const { id, text, asset_id } = r0;
     if (!online) {
       toast({ title: "Offline", description: "Cloud LLM synthesis requires connectivity.", variant: "destructive" });
       return;
     }
     setDistillId(id);
     try {
+      // search hits may omit sensitivity; read the stored point and fail closed if we can't
+      const sensitivity = String(r0.sensitivity ?? (await edgeApi.getPoint(shardName, id)).sensitivity ?? "").trim().toLowerCase();
+      if (!sensitivity || isRestricted(sensitivity)) throw new Error(sensitivity ? RESTRICTED_TIP : "Could not verify note sensitivity");
       const r = await fetch("/api/intelligence", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -144,7 +153,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
       });
       const data = await r.json();
       if (!r.ok || !data.ok) throw new Error(data.error || "LLM failed");
-      setDistilled((p) => ({ ...p, [id]: { sop: data.sop, saving: false } }));
+      setDistilled((p) => ({ ...p, [id]: { sop: data.sop, saving: false, sensitivity } }));
       toast({ title: "SOP distilled by cloud LLM", description: "Review and save to the manuals shard." });
     } catch (e) {
       toast({ title: "Distill failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
@@ -153,10 +162,11 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
     }
   }
 
-  async function saveSop(id: string, sop: string, asset_id?: string) {
-    setDistilled((p) => ({ ...p, [id]: { sop, saving: true } }));
+  async function saveSop(id: string, sop: string, sensitivity: string, asset_id?: string) {
+    setDistilled((p) => ({ ...p, [id]: { sop, saving: true, sensitivity } }));
     try {
-      await edge.write({ shard: "manuals", text: sop, criticality: "high", sensitivity: "internal", asset_id, title: `SOP distilled from incident`, domain: "manual" });
+      // derived SOP inherits the source note's sensitivity (policy decides whether it syncs)
+      await edge.write({ shard: "manuals", text: sop, criticality: "high", sensitivity, asset_id, title: `SOP distilled from incident`, domain: "manual" });
       toast({ title: "SOP saved to manuals", description: "Queued for fleet sync — will flow to all devices." });
       setDistilled((p) => {
         const n = { ...p };
@@ -165,7 +175,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
       });
     } catch (e) {
       toast({ title: "Save failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
-      setDistilled((p) => ({ ...p, [id]: { sop, saving: false } }));
+      setDistilled((p) => ({ ...p, [id]: { sop, saving: false, sensitivity } }));
     }
   }
 
@@ -382,6 +392,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
               {res.results.map((r, i) => {
                 const maxScore = res.results[0]?.score ?? 1;
                 const pct = Math.max(4, Math.round((r.score / (maxScore || 1)) * 100));
+                const restricted = isRestricted(r.sensitivity ?? res.filters?.sensitivity);
                 return (
                   <div
                     key={r.id}
@@ -410,12 +421,12 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
                           </div>
                           {r.updated_at && <span className="font-mono text-[10px] text-muted-foreground">{formatRelative(r.updated_at)}</span>}
                           <button
-                            onClick={(e) => { e.stopPropagation(); distill(r.id, r.text, r.asset_id); }}
-                            disabled={!online || distillId === r.id}
-                            title={online ? "Distill this incident into an SOP via the cloud LLM" : "Cloud LLM requires connectivity"}
+                            onClick={(e) => { e.stopPropagation(); distill(r, res.shard); }}
+                            disabled={!online || restricted || distillId === r.id}
+                            title={restricted ? RESTRICTED_TIP : online ? "Distill this incident into an SOP via the cloud LLM" : "Cloud LLM requires connectivity"}
                             className={cn(
                               "flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider transition-colors disabled:opacity-40",
-                              online ? "border-sky-500/30 bg-sky-500/5 text-sky-300 hover:bg-sky-500/10" : "border-border text-muted-foreground"
+                              restricted ? "border-rose-500/30 text-rose-300" : online ? "border-sky-500/30 bg-sky-500/5 text-sky-300 hover:bg-sky-500/10" : "border-border text-muted-foreground"
                             )}
                           >
                             {distillId === r.id ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Cloud className="h-2.5 w-2.5" />}
@@ -436,7 +447,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
                             <div className="mt-2 flex items-center gap-1.5">
                               <Button
                                 size="sm"
-                                onClick={(e) => { e.stopPropagation(); saveSop(r.id, distilled[r.id].sop, r.asset_id); }}
+                                onClick={(e) => { e.stopPropagation(); saveSop(r.id, distilled[r.id].sop, distilled[r.id].sensitivity, r.asset_id); }}
                                 disabled={distilled[r.id].saving || !!edge.busy}
                                 className="gap-1 bg-emerald-500/90 font-mono text-[10px] text-emerald-950 hover:bg-emerald-400"
                               >

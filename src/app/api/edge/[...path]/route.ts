@@ -10,41 +10,61 @@ import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-const PORT = /^\d{2,5}$/;
+// Only the edge engines may be reached — without this list the proxy is an open
+// SSRF relay to every localhost service (e.g. Qdrant's unauthenticated :6333).
+const ALLOWED_PORTS = new Set((process.env.EDGE_PORTS ?? "3030,3031").split(",").map((p) => p.trim()));
+const TOKEN = process.env.EDGE_TOKEN;
+const MAX_BODY = 8 * 1024 * 1024; // same cap the engine enforces
+const TIMEOUT_MS = 10_000;
 
 async function proxy(req: Request, method: string, path: string[]) {
   const url = new URL(req.url);
   const port = url.searchParams.get("XTransformPort");
-  if (!port || !PORT.test(port)) {
+  if (!port) {
     return NextResponse.json(
       { error: "XTransformPort query param required (e.g. ?XTransformPort=3030)" },
       { status: 400 },
     );
   }
+  if (!ALLOWED_PORTS.has(port)) {
+    return NextResponse.json({ error: `port ${port} is not an edge engine` }, { status: 403 });
+  }
+  // `..` (or its %2e spelling, which the URL parser also resolves) would let
+  // fetch() normalise the target out of /api/edge/
+  if (path.some((seg) => /^(\.|%2e){1,2}$/i.test(seg) || seg.includes("/") || seg.includes("\\"))) {
+    return NextResponse.json({ error: "invalid path" }, { status: 400 });
+  }
 
   url.searchParams.delete("XTransformPort");
   const target = `http://127.0.0.1:${port}/api/edge/${path.join("/")}${url.search}`;
+  if (!new URL(target).pathname.startsWith("/api/edge/")) {
+    return NextResponse.json({ error: "invalid path" }, { status: 400 });
+  }
 
-  const init: RequestInit = { method, headers: { accept: "application/json" } };
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (TOKEN) headers["x-edge-token"] = TOKEN;
+  const init: RequestInit = { method, headers };
   if (method !== "GET" && method !== "HEAD") {
-    init.headers = {
-      ...init.headers,
-      "content-type": req.headers.get("content-type") ?? "application/json",
-    };
+    // forwarded as-is: the engine rejects non-JSON bodies, which is what stops
+    // a cross-site <form>/text/plain POST from driving it
+    headers["content-type"] = req.headers.get("content-type") ?? "";
+    // ponytail: chunked bodies are still buffered before the length check; stream-count if that matters
+    if (Number(req.headers.get("content-length") ?? 0) > MAX_BODY) {
+      return NextResponse.json({ error: "body too large" }, { status: 413 });
+    }
     init.body = await req.text();
+    if (init.body.length > MAX_BODY) return NextResponse.json({ error: "body too large" }, { status: 413 });
   }
 
   try {
-    const res = await fetch(target, { ...init, cache: "no-store" });
+    const res = await fetch(target, { ...init, cache: "no-store", signal: AbortSignal.timeout(TIMEOUT_MS) });
     return new NextResponse(await res.text(), {
       status: res.status,
       headers: { "content-type": res.headers.get("content-type") ?? "application/json" },
     });
   } catch (e) {
-    return NextResponse.json(
-      { error: `edge-engine unreachable on port ${port}: ${e instanceof Error ? e.message : String(e)}` },
-      { status: 502 },
-    );
+    console.error("[edge-proxy]", port, e);
+    return NextResponse.json({ error: `edge-engine unreachable on port ${port}` }, { status: 502 });
   }
 }
 

@@ -97,6 +97,10 @@ export default function PointDetailDrawer({
   if (!point) return null;
 
   const p = { ...point, ...(full ?? {}) } as PointRef & Record<string, unknown>;
+  // gate the cloud LLM on the stored payload's sensitivity; unknown (not loaded) fails closed
+  const srcSensitivity = String(full?.sensitivity ?? "").trim().toLowerCase();
+  const restricted = srcSensitivity === "restricted";
+  const canDistill = online && !!srcSensitivity && !restricted;
 
   async function handleDelete() {
     setDeleting(true);
@@ -114,8 +118,8 @@ export default function PointDetailDrawer({
   }
 
   async function handleDistill() {
-    if (!online) {
-      toast({ title: "Offline", description: "Cloud LLM requires connectivity.", variant: "destructive" });
+    if (!canDistill) {
+      toast({ title: "Distill unavailable", description: restricted ? "Restricted notes never leave the device." : "Cloud LLM requires connectivity.", variant: "destructive" });
       return;
     }
     setDistilling(true);
@@ -139,7 +143,7 @@ export default function PointDetailDrawer({
   async function handleSaveSop() {
     if (!distilledSop) return;
     try {
-      await edge.write({ shard: "manuals", text: distilledSop, criticality: "high", sensitivity: "internal", asset_id: p.asset_id, title: `SOP distilled from ${p.slug ?? "incident"}`, domain: "manual" });
+      await edge.write({ shard: "manuals", text: distilledSop, criticality: "high", sensitivity: srcSensitivity, asset_id: p.asset_id, title: `SOP distilled from ${p.slug ?? "incident"}`, domain: "manual" });
       toast({ title: "SOP saved to manuals", description: "Queued for fleet sync." });
       setDistilledSop(null);
       onClose();
@@ -246,10 +250,24 @@ export default function PointDetailDrawer({
                   </Button>
                 </div>
               ) : (
-                <Button size="sm" variant="outline" onClick={handleDistill} disabled={!online || distilling} className="gap-1.5 border-sky-500/30 bg-sky-500/5 font-mono text-[11px] text-sky-300 hover:bg-sky-500/10">
-                  {distilling ? <Loader2 className="h-3 w-3 animate-spin" /> : <Cloud className="h-3 w-3" />}
-                  Distill → SOP
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleDistill}
+                    disabled={!canDistill || distilling}
+                    title={restricted ? "Restricted notes never leave the device — cloud LLM distill is disabled" : undefined}
+                    className="gap-1.5 border-sky-500/30 bg-sky-500/5 font-mono text-[11px] text-sky-300 hover:bg-sky-500/10"
+                  >
+                    {distilling ? <Loader2 className="h-3 w-3 animate-spin" /> : <Cloud className="h-3 w-3" />}
+                    Distill → SOP
+                  </Button>
+                  {restricted && (
+                    <span className="flex items-center gap-1 font-mono text-[10px] text-rose-300">
+                      <ShieldAlert className="h-3 w-3" /> restricted — stays on device
+                    </span>
+                  )}
+                </div>
               )}
             </div>
           )}

@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -64,9 +67,9 @@ jobs:
         with:
           path: |
             .qdrant/qdrant
-            ~/.cache/huggingface
+            mini-services/edge-engine/data/models
             ~/.cache/ms-playwright
-          key: edge-mem-${{ runner.os }}-qdrant-v1.19.1-${{ hashFiles('mini-services/edge-engine/requirements.txt') }}
+          key: edge-mem-${{ runner.os }}-qdrant-v1.19.1-bge-aa8f8b0-${{ hashFiles('mini-services/edge-engine/requirements.txt') }}
 
       - name: Install dependencies
         run: |
@@ -75,6 +78,9 @@ jobs:
           python -m pip install playwright==1.62.0
           python -m playwright install --with-deps chromium
           bun install --frozen-lockfile
+
+      - name: Create .env from the template
+        run: cp .env.example .env
 
       - name: Start Qdrant + edge-engine (device-alpha) + federated peer (device-beta)
         run: nohup ./mini-services/edge-engine/start.sh > edge-engine.log 2>&1 &

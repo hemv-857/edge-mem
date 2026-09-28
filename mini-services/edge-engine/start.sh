@@ -20,25 +20,45 @@ qdrant_up() { curl -sf --max-time 1 "$QD_URL/healthz" >/dev/null 2>&1; }
 
 ensure_qdrant() {
 	qdrant_up && return 0
-	local bin="$QD_HOME/qdrant" ver="${QDRANT_VERSION:-v1.19.1}" arch=""
+	local bin="$QD_HOME/qdrant" ver="${QDRANT_VERSION:-v1.19.1}" arch="" sha=""
+	# SHA-256 of the v1.19.1 release tarballs (GitHub release asset digests).
+	# Another QDRANT_VERSION needs its own QDRANT_SHA256.
 	case "$(uname -sm)" in
-		"Darwin arm64")    arch=aarch64-apple-darwin ;;
-		"Darwin x86_64")   arch=x86_64-apple-darwin ;;
-		"Linux x86_64")    arch=x86_64-unknown-linux-gnu ;;
-		"Linux aarch64")   arch=aarch64-unknown-linux-gnu ;;
+		"Darwin arm64")    arch=aarch64-apple-darwin;      sha=e060209dfefc9d977ddcec48521349f505f8fd1ce21f2a3db444140870522fe4 ;;
+		"Darwin x86_64")   arch=x86_64-apple-darwin;       sha=ba7cbada9a90aefdbd7f92de4e093cd25328206bd65e9e96657bd6133d272637 ;;
+		"Linux x86_64")    arch=x86_64-unknown-linux-gnu;  sha=eef986e769d4d3e806dd2d546e1b4ecdd416211e54d34b4ed764fac7c58e1085 ;;
+		"Linux aarch64")   arch=aarch64-unknown-linux-musl; sha=0e607c11705fab22f7d667f4749bc0b6b60a8fa9e91de71880a6ebafbbda1b26 ;;
 		*) echo "[edge-engine] no qdrant build for $(uname -sm)" >&2; return 1 ;;
 	esac
+	[ "$ver" = v1.19.1 ] || sha="${QDRANT_SHA256:-}"
 	if [ ! -x "$bin" ]; then
+		if [ -z "$sha" ]; then
+			echo "[edge-engine] set QDRANT_SHA256 for qdrant $ver ($arch)" >&2
+			return 1
+		fi
 		echo "[edge-engine] bootstrapping qdrant $ver ($arch) into $QD_HOME..."
 		mkdir -p "$QD_HOME" || return 1
-		curl -fsSL "https://github.com/qdrant/qdrant/releases/download/$ver/qdrant-$arch.tar.gz" \
-			| tar -xz -C "$QD_HOME" qdrant || return 1
+		local tgz="$QD_HOME/qdrant-$arch.tar.gz"
+		curl -fsSL -o "$tgz" "https://github.com/qdrant/qdrant/releases/download/$ver/qdrant-$arch.tar.gz" || return 1
+		local got
+		got="$({ sha256sum "$tgz" 2>/dev/null || shasum -a 256 "$tgz"; } | cut -d' ' -f1)"
+		if [ "$got" != "$sha" ]; then
+			echo "[edge-engine] qdrant tarball sha256 mismatch — refusing to run it" >&2
+			rm -f "$tgz"
+			return 1
+		fi
+		tar -xzf "$tgz" -C "$QD_HOME" qdrant && rm -f "$tgz" || return 1
 	fi
-	( cd "$QD_HOME" && QDRANT__STORAGE__STORAGE_PATH="$QD_HOME/storage" \
+	# loopback only: the cloud is reached by the engines on this host; anything
+	# remote should use its own secured QDRANT_URL. QDRANT_API_KEY (optional)
+	# turns on Qdrant auth and is also presented by cloud_qdrant.py.
+	( cd "$QD_HOME" && env QDRANT__STORAGE__STORAGE_PATH="$QD_HOME/storage" \
+		QDRANT__SERVICE__HOST=127.0.0.1 \
+		${QDRANT_API_KEY:+"QDRANT__SERVICE__API_KEY=$QDRANT_API_KEY"} \
 		nohup "$bin" >"$QD_HOME/qdrant.log" 2>&1 & ) || return 1
 	# we own a fresh local server now — ignore any operator-supplied URL that
 	# was already unreachable, otherwise the engine would probe that instead
-	QD_URL="http://localhost:6333"
+	QD_URL="http://127.0.0.1:6333"
 	for _ in $(seq 1 60); do
 		qdrant_up && return 0
 		sleep 0.5
@@ -94,6 +114,7 @@ if [ "${EDGE_FEDERATION_AUTO:-1}" = "1" ] && [ "$PEER_HOST" = "localhost" ] && !
 	EDGE_PORT="$PEER_PORT" \
 	EDGE_DEVICE=device-beta \
 	EDGE_DATA_DIR="$ROOT/mini-services/edge-engine/data-beta" \
+	EDGE_MODEL_DIR="${EDGE_MODEL_DIR:-$ROOT/mini-services/edge-engine/data/models}" \
 	FEDERATED_PEERS= \
 	nohup "$PY" src/main.py >"$ROOT/mini-services/edge-engine/data-beta.log" 2>&1 &
 fi

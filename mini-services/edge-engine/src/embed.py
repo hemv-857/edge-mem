@@ -6,19 +6,52 @@ no network calls. This is the 'work without network access' requirement.
 """
 from __future__ import annotations
 
+import hashlib
+import os
 import threading
 from typing import List
 
 from fastembed import TextEmbedding
+from huggingface_hub import snapshot_download
 from qdrant_edge import Bm25, Bm25Config, SparseVector
 
 DENSE_MODEL = "BAAI/bge-small-en-v1.5"
 DENSE_DIM = 384
 SPARSE_NAME = "text"  # name of the sparse vector field in every shard
 
+# Pinned artifact for DENSE_MODEL (fastembed's HF source). fastembed would
+# otherwise fetch the hub's latest revision into tempfile.gettempdir(), a
+# shared dir any local user can pre-seed. Bump all three together.
+DENSE_REPO = "Qdrant/bge-small-en-v1.5-onnx-Q"
+DENSE_REVISION = "aa8f8b060edb00e03bfdd08813a2949946c8ba55"
+DENSE_ONNX = "model_optimized.onnx"
+DENSE_ONNX_SHA256 = "51f1bd0addd6e859e42c2c8021a5e5461385bb676a649f4b269aa445449f2431"
+# same default as engine.DATA_DIR (not imported: engine imports this module)
+MODEL_DIR = os.environ.get("EDGE_MODEL_DIR") or os.path.join(
+    os.environ.get("EDGE_DATA_DIR", os.path.join(os.path.dirname(__file__), "..", "data")),
+    "models")
+
 _lock = threading.Lock()
 _dense: TextEmbedding | None = None
 _bm25: Bm25 | None = None
+
+
+def _pinned_model_path() -> str:
+    """Local snapshot of DENSE_REPO@DENSE_REVISION, onnx hash-checked."""
+    kw = dict(repo_id=DENSE_REPO, revision=DENSE_REVISION, cache_dir=MODEL_DIR,
+              allow_patterns=["*.json", "*.txt", DENSE_ONNX])
+    try:
+        path = snapshot_download(local_files_only=True, **kw)  # offline-first
+    except Exception:  # noqa: BLE001 — not cached yet
+        os.makedirs(MODEL_DIR, mode=0o700, exist_ok=True)
+        path = snapshot_download(**kw)
+    h = hashlib.sha256()
+    with open(os.path.join(path, DENSE_ONNX), "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    if h.hexdigest() != DENSE_ONNX_SHA256:
+        raise RuntimeError(f"{DENSE_ONNX} in {path} does not match the pinned sha256")
+    return path
 
 
 def get_dense() -> TextEmbedding:
@@ -28,10 +61,9 @@ def get_dense() -> TextEmbedding:
             if _dense is None:
                 # lazy load — first call downloads/loads weights (~0.2s after cache)
                 # threads=2 bounds onnxruntime memory/CPU on the edge device
-                try:
-                    _dense = TextEmbedding(model_name=DENSE_MODEL, threads=2)
-                except TypeError:
-                    _dense = TextEmbedding(model_name=DENSE_MODEL)
+                path = _pinned_model_path()
+                _dense = TextEmbedding(model_name=DENSE_MODEL, cache_dir=MODEL_DIR,
+                                       threads=2, specific_model_path=path)
     return _dense
 
 

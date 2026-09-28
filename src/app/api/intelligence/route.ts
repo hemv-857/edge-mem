@@ -16,6 +16,10 @@ export const dynamic = "force-dynamic";
 
 const BASE_URL = (process.env.LLM_BASE_URL ?? "https://api.openai.com/v1").replace(/\/+$/, "");
 const MODEL = process.env.LLM_MODEL ?? "gpt-4o-mini";
+const MAX_TEXT = 8000;
+const MAX_BODY = 64 * 1024; // 8000 chars of \uXXXX-escaped JSON fits with room to spare
+const MAX_PROMPT = MAX_TEXT + 1000; // text + fixed template + a 64-char asset id
+const ASSET_ID = /^[\w.-]{1,64}$/;
 
 type Body =
   | { action: "distill_sop"; text: string; asset_id?: string }
@@ -24,6 +28,8 @@ type Body =
 type Msg = { role: "system" | "user" | "assistant"; content: string };
 
 async function chat(messages: Msg[]): Promise<string> {
+  // every field that reaches the paid prompt is bounded; this catches the next one added
+  if (messages.some((m) => m.role === "user" && m.content.length > MAX_PROMPT)) throw new Error("prompt too long");
   const key = process.env.LLM_API_KEY ?? process.env.OPENAI_API_KEY;
   if (!key) throw new Error("LLM_API_KEY (or OPENAI_API_KEY) is not set");
 
@@ -33,7 +39,11 @@ async function chat(messages: Msg[]): Promise<string> {
     body: JSON.stringify({ model: MODEL, messages, stream: false }),
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`LLM request failed: ${res.status} ${await res.text()}`);
+  // provider bodies can echo request details; log them server-side, don't return them
+  if (!res.ok) {
+    console.error("[intelligence] LLM error", res.status, (await res.text()).slice(0, 500));
+    throw new Error(`LLM request failed: ${res.status}`);
+  }
 
   const data = (await res.json()) as {
     choices?: { message?: { content?: string } }[];
@@ -46,19 +56,38 @@ const SOP_SYSTEM = `You are a senior industrial maintenance engineer distilling 
 const TAG_SYSTEM = `You are a reliability engineer classifying a maintenance note. Respond with ONLY a single JSON object, no prose, no code fences: {"criticality":"low|medium|high|critical","sensitivity":"internal|restricted|public","reason":"<<=12 words>"}. Critical = safety/production-down/severity above ISO 10816 zone D. Restricted = personal/PII/contractor-sensitive. Default internal.`;
 
 export async function POST(req: Request) {
+  // req.json() parses any Content-Type, so a cross-site text/plain "simple request"
+  // (no preflight) would otherwise reach the paid LLM. Require JSON like the engine does.
+  const ctype = (req.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+  if (ctype !== "application/json") {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
+  if (Number(req.headers.get("content-length") ?? 0) > MAX_BODY) {
+    return NextResponse.json({ error: "body too large" }, { status: 413 });
+  }
+
   let body: Body;
   try {
-    body = (await req.json()) as Body;
+    const raw = await req.text();
+    if (raw.length > MAX_BODY) return NextResponse.json({ error: "body too large" }, { status: 413 });
+    body = JSON.parse(raw) as Body;
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
 
-  const text = (body?.text ?? "").trim();
+  const text = typeof body?.text === "string" ? body.text.trim() : "";
   if (!text) return NextResponse.json({ error: "text required" }, { status: 400 });
+  // unauthenticated route in front of a paid API key — bound the spend per call
+  if (text.length > MAX_TEXT) return NextResponse.json({ error: `text over ${MAX_TEXT} chars` }, { status: 413 });
+  // UI sends null/"" for notes without an asset — treat as absent
+  const assetId = (body.action === "distill_sop" && body.asset_id) || undefined;
+  if (assetId !== undefined && (typeof assetId !== "string" || !ASSET_ID.test(assetId))) {
+    return NextResponse.json({ error: "invalid asset_id" }, { status: 400 });
+  }
 
   try {
     if (body.action === "distill_sop") {
-      const userPrompt = `Incident note (asset ${body.asset_id ?? "unknown"}):\n"""\n${text}\n"""\n\nDistill this into a reusable SOP update.`;
+      const userPrompt = `Incident note (asset ${assetId ?? "unknown"}):\n"""\n${text}\n"""\n\nDistill this into a reusable SOP update.`;
       const sop = await chat([
         { role: "system", content: SOP_SYSTEM },
         { role: "user", content: userPrompt },
@@ -86,8 +115,7 @@ export async function POST(req: Request) {
         sensitivity: ["internal", "restricted", "public"].includes(parsed.sensitivity ?? "")
           ? parsed.sensitivity
           : "internal",
-        reason: parsed.reason ?? "auto-classified",
-        raw,
+        reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 160) : "auto-classified",
       });
     }
     return NextResponse.json({ error: "unknown action" }, { status: 400 });

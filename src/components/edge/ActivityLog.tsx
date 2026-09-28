@@ -78,8 +78,10 @@ export default function ActivityLog({ edge }: { edge: EdgeHook }) {
   }, [counts]);
 
   function exportLog() {
+    // messages embed caller-supplied slugs/queries: keep one row per event and neutralise formula cells
+    const cell = (v: unknown) => String(v ?? "").replace(/[\t\r\n]/g, " ").replace(/^[=+\-@]/, "'$&");
     const lines = visible.map((e) =>
-      `${new Date(e.ts).toISOString()}\t${e.device}\t${e.kind}\t${e.message}\t${JSON.stringify(e.meta ?? {})}`
+      [new Date(e.ts).toISOString(), e.device, e.kind, e.message, JSON.stringify(e.meta ?? {})].map(cell).join("\t")
     ).join("\n");
     const blob = new Blob([`timestamp\tdevice\tkind\tmessage\tmeta\n${lines}`], { type: "text/tab-separated-values" });
     const url = URL.createObjectURL(blob);

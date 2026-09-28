@@ -17,8 +17,11 @@ import json
 import time
 import uuid
 import shutil
+import signal
 import hashlib
 import threading
+import urllib.parse
+import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
 from qdrant_edge import (
@@ -71,6 +74,88 @@ REMOTE_MEMBERS = [
     for m in FLEET_DEFS if m["id"] not in HOSTED_IDS
 ]
 
+# Peer probes run on the engine's only thread, so they are bounded in time and
+# size, never follow redirects, and only carry EDGE_TOKEN to peers we can trust
+# with it: loopback, https, or everything when EDGE_PEER_SEND_TOKEN=1.
+PEER_DEADLINE_S = 2.0
+PEER_MAX_BYTES = 65536
+_LOOPBACK = ("localhost", "127.0.0.1", "::1")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None  # a 3xx becomes an HTTPError instead of a second request
+
+
+_PEER_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+class _PeerTimeout(Exception):
+    pass
+
+
+def _peer_alarm(signum, frame):
+    raise _PeerTimeout()
+
+
+def peer_gets_token(url: str) -> bool:
+    u = urllib.parse.urlsplit(url)
+    return (u.scheme == "https" or (u.hostname or "") in _LOOPBACK
+            or os.environ.get("EDGE_PEER_SEND_TOKEN") == "1")
+
+
+def fetch_peer_json(url: str) -> Any:
+    """GET url with a hard wall-clock deadline (SIGALRM; the engine is
+    single-threaded on the main thread) and a response size cap."""
+    headers = {}
+    token = os.environ.get("EDGE_TOKEN", "")
+    if token and peer_gets_token(url):
+        headers["X-Edge-Token"] = token
+    req = urllib.request.Request(url, headers=headers)
+    deadline = time.monotonic() + PEER_DEADLINE_S
+    use_alarm = hasattr(signal, "setitimer") and threading.current_thread() is threading.main_thread()
+    if use_alarm:
+        old = signal.signal(signal.SIGALRM, _peer_alarm)
+        signal.setitimer(signal.ITIMER_REAL, PEER_DEADLINE_S)
+    try:
+        chunks: List[bytes] = []
+        size = 0
+        with _PEER_OPENER.open(req, timeout=PEER_DEADLINE_S) as resp:
+            while True:
+                if time.monotonic() > deadline:
+                    raise _PeerTimeout()
+                b = resp.read1(8192)
+                if not b:
+                    break
+                size += len(b)
+                if size > PEER_MAX_BYTES:
+                    raise ValueError("peer response too large")
+                chunks.append(b)
+    finally:
+        if use_alarm:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, old)
+    return json.loads(b"".join(chunks).decode() or "{}")
+
+
+def _count(v: Any) -> int:
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else 0
+
+
+def clean_peer_entry(d: Any) -> Optional[Dict[str, Any]]:
+    """Keep only the typed fields the fleet panel renders from a peer."""
+    if not isinstance(d, dict):
+        return None
+    shards = d.get("shards") if isinstance(d.get("shards"), list) else []
+    return {
+        "online": d.get("online") is not False,
+        **{k: _count(d.get(k)) for k in ("total_points", "queue_depth", "open_conflicts",
+                                          "bytes_pushed", "bytes_pulled")},
+        "last_sync_at": _count(d.get("last_sync_at")) or None,
+        "shards": [{k: v for k, v in s.items() if isinstance(v, (str, int, float, bool))}
+                   for s in shards[:len(SHARD_DEFS)] if isinstance(s, dict)],
+    }
+
 # ---------------------------------------------------------------------------
 # policy engine
 # ---------------------------------------------------------------------------
@@ -87,16 +172,37 @@ DEFAULT_POLICY = {
 }
 
 
+def norm_sensitivity(v: Any) -> str:
+    return str(v if v is not None else "").strip().lower() or "internal"
+
+
+def is_local_only(payload: Dict[str, Any]) -> bool:
+    """Hard residency floor: restricted data never leaves the device, whatever
+    the (editable) policy says."""
+    return norm_sensitivity(payload.get("sensitivity")) == "restricted"
+
+
+RESIDENCY_FLOOR = {"sync_state": "local_only", "matched_rule": "floor",
+                   "reason": "Restricted data never leaves the device (hard floor, not editable)"}
+
+
 def evaluate_policy(point_meta: Dict[str, Any], policy: Dict[str, Any]) -> Dict[str, Any]:
     """Return {sync_state, matched_rule, reason} for a point given its tags."""
+    decision = {"sync_state": "queued", "matched_rule": None, "reason": "Default: queue for opportunistic sync"}
     for rule in policy["rules"]:
         field = rule["field"]
         val = point_meta.get(field)
-        if rule["op"] == "eq" and val == rule.get("value"):
-            return {"sync_state": rule["action"], "matched_rule": rule["id"], "reason": rule["reason"]}
-        if rule["op"] == "in" and val in rule.get("values", []):
-            return {"sync_state": rule["action"], "matched_rule": rule["id"], "reason": rule["reason"]}
-    return {"sync_state": "queued", "matched_rule": None, "reason": "Default: queue for opportunistic sync"}
+        if (rule["op"] == "eq" and val == rule.get("value")) or \
+           (rule["op"] == "in" and val in rule.get("values", [])):
+            decision = {"sync_state": rule["action"], "matched_rule": rule["id"], "reason": rule["reason"]}
+            break
+    if decision["sync_state"] != "local_only" and is_local_only(point_meta):
+        return dict(RESIDENCY_FLOOR)
+    return decision
+
+
+def stays_local(payload: Dict[str, Any], policy: Dict[str, Any]) -> bool:
+    return is_local_only(payload) or evaluate_policy(payload, policy)["sync_state"] == "local_only"
 
 
 FILTERABLE_KEYS = ("domain", "criticality", "sensitivity", "origin_device", "sync_state", "asset_id")
@@ -232,7 +338,8 @@ class ShardStore:
                 "id": str(r.id), "score": round(float(r.score), 4),
                 "slug": p.get("slug"), "text": p.get("text", ""),
                 "title": p.get("title"), "domain": p.get("domain"),
-                "criticality": p.get("criticality"), "origin_device": p.get("origin_device"),
+                "criticality": p.get("criticality"), "sensitivity": p.get("sensitivity"),
+                "origin_device": p.get("origin_device"),
                 "asset_id": p.get("asset_id"), "updated_at": p.get("updated_at"),
             })
         return out
@@ -496,13 +603,15 @@ class Fleet:
             return hit[1]
         data: Optional[Dict[str, Any]] = None
         try:
-            import urllib.request
-            with urllib.request.urlopen(f"{url}/api/edge/fleet", timeout=1.5) as resp:
-                payload = json.loads(resp.read().decode() or "{}")
-            data = next((d for d in payload.get("devices", []) if d.get("live")), None)
+            payload = fetch_peer_json(f"{url}/api/edge/fleet")
+            devices = payload.get("devices") if isinstance(payload, dict) else None
+            live = next((d for d in devices if isinstance(d, dict) and d.get("live") is True), None) \
+                if isinstance(devices, list) else None
+            data = clean_peer_entry(live)
         except Exception:
             data = None
-        self._peer_cache[url] = (now, data)
+        # stamp after the call so a slow failure is cached for a full TTL
+        self._peer_cache[url] = (time.time(), data)
         return data
 
     def remote_member_entry(self, m: Dict[str, Any]) -> Dict[str, Any]:
@@ -522,17 +631,8 @@ class Fleet:
         if url:
             live = self._peer_overview(url)
             if live:
-                entry.update({
-                    "reachable": True,
-                    "online": bool(live.get("online", True)),
-                    "total_points": live.get("total_points", 0),
-                    "queue_depth": live.get("queue_depth", 0),
-                    "open_conflicts": live.get("open_conflicts", 0),
-                    "last_sync_at": live.get("last_sync_at") or entry["last_sync_at"],
-                    "bytes_pushed": live.get("bytes_pushed", 0),
-                    "bytes_pulled": live.get("bytes_pulled", 0),
-                    "shards": live.get("shards", []),
-                })
+                entry.update({**live, "reachable": True,
+                              "last_sync_at": live["last_sync_at"] or entry["last_sync_at"]})
         return entry
 
     def _cloud_contrib_by_origin(self) -> Dict[str, int]:
@@ -586,11 +686,27 @@ class Fleet:
                 items = [a for a in items if a["device"] == device or a["device"] == "system"]
             return list(reversed(items[-limit:]))
 
+    # -- queue / conflict helpers --
+    @staticmethod
+    def _dequeue(dev: Device, point_id: str):
+        dev.queue = [q for q in dev.queue if q.get("point_id") != point_id]
+
+    @staticmethod
+    def _conflict(pid: str, slug: Any, shard: str, local: Dict[str, Any], remote: Dict[str, Any],
+                  local_device: str, **extra) -> Dict[str, Any]:
+        side = lambda p, dev: {"text": p.get("text", ""), "updated_at": p.get("updated_at"),
+                               "origin_device": dev, "criticality": p.get("criticality"),
+                               "sensitivity": p.get("sensitivity")}
+        now = int(time.time() * 1000)
+        return {"id": f"c-{pid[:8]}-{now}", "point_id": pid, "slug": slug, "shard": shard,
+                "local": side(local, local_device),
+                "remote": side(remote, remote.get("origin_device")),
+                "status": "open", "created_at": now, **extra}
+
     # -- write --
     def write_point(self, device_id: str, shard: str, payload: Dict[str, Any],
                     text: Optional[str] = None, point_id: Optional[str] = None,
-                    origin_device: Optional[str] = None,
-                    updated_at: Optional[int] = None) -> Dict[str, Any]:
+                    origin_device: Optional[str] = None) -> Dict[str, Any]:
         dev = self.devices[device_id]
         if shard not in dev.shards:
             raise ValueError(f"unknown shard {shard}")
@@ -602,17 +718,17 @@ class Fleet:
         meta = {
             "domain": payload.get("domain", shard.rstrip("s") if shard.endswith("s") else shard),
             "criticality": payload.get("criticality", "medium"),
-            "sensitivity": payload.get("sensitivity", "internal"),
+            "sensitivity": norm_sensitivity(payload.get("sensitivity")),
         }
         decision = evaluate_policy(meta, self.policy)
         full_payload = dict(payload)
         full_payload.update({
             "slug": slug, "text": text, "domain": meta["domain"],
             "criticality": meta["criticality"], "sensitivity": meta["sensitivity"],
-            # provenance/timestamp are caller-supplied on snapshot import so a
-            # handoff keeps the original authorship instead of re-stamping it
+            # provenance is caller-supplied on snapshot import so a handoff
+            # keeps the original authorship; the timestamp is always ours
             "origin_device": origin_device or device_id,
-            "updated_at": now if updated_at is None else updated_at,
+            "updated_at": now,
             "sync_state": decision["sync_state"],
         })
         dense = embed.embed_dense(text)
@@ -621,12 +737,13 @@ class Fleet:
         dev.shards[shard].optimize()
         self.log(device_id, "write", f"Wrote point '{slug}' to {shard} ({meta['criticality']}/{meta['sensitivity']}) → {decision['sync_state']}",
                  {"shard": shard, "slug": slug, "decision": decision, "point_id": point_id})
-        # dual-write queue: enqueue unless local_only
+        # dual-write queue: one entry per point (latest wins); a rewrite to
+        # local_only drops any stale entry so the old version can't sync
+        self._dequeue(dev, point_id)
         if decision["sync_state"] != "local_only":
             dev.queue.append({
-                "point_id": point_id, "shard": shard, "payload": full_payload,
+                "point_id": point_id, "shard": shard, "slug": slug,
                 "enqueued_at": now, "priority": 1 if decision["sync_state"] == "sync_now" else 0,
-                "text": text,
             })
             self.log(device_id, "queue", f"Point '{slug}' enqueued for sync (priority={'high' if decision['sync_state']=='sync_now' else 'normal'})",
                      {"queue_depth": len(dev.queue)})
@@ -661,25 +778,29 @@ class Fleet:
         if dev.queue:
             # critical first
             queue = sorted(dev.queue, key=lambda q: -q.get("priority", 0))
+            held = 0
+            touched = set()
             for item in queue:
-                shard = item["shard"]; payload = dict(item["payload"])
-                point_id = item["point_id"]
+                shard = item.get("shard"); point_id = item.get("point_id")
+                if shard not in dev.shards or not point_id:
+                    held += 1
+                    continue
+                # the queue entry is only a pointer: push the point as it is
+                # *now*, under the policy as it is *now*
+                payload = dev.shards[shard].retrieve_payload(point_id)
+                if payload is None or stays_local(payload, self.policy):
+                    held += 1
+                    continue
+                payload.pop("_id", None)
+                text = payload.get("text", "")
                 # conflict check at cloud: does cloud already have this id from another device?
                 existing = self.cloud.shards[shard].retrieve_payload(point_id)
                 if existing and existing.get("origin_device") not in (None, device_id):
                     # remote version from another device exists
                     if existing.get("updated_at", 0) != payload.get("updated_at"):
                         # genuine divergence -> record conflict, do NOT silently overwrite
-                        conflict = {
-                            "id": f"c-{point_id[:8]}-{int(time.time()*1000)}",
-                            "point_id": point_id, "slug": payload.get("slug"), "shard": shard,
-                            "local": {"text": payload.get("text",""), "updated_at": payload.get("updated_at"),
-                                      "origin_device": device_id, "criticality": payload.get("criticality")},
-                            "remote": {"text": existing.get("text",""), "updated_at": existing.get("updated_at"),
-                                       "origin_device": existing.get("origin_device"),
-                                       "criticality": existing.get("criticality")},
-                            "status": "open", "created_at": int(time.time()*1000),
-                        }
+                        conflict = self._conflict(point_id, payload.get("slug"), shard,
+                                                  payload, existing, device_id)
                         dev.conflicts.append(conflict)
                         new_conflicts += 1
                         self.log(device_id, "conflict",
@@ -688,17 +809,20 @@ class Fleet:
                         pushed += 1  # count as processed
                         continue
                 # no conflict -> upsert to cloud
-                dense = embed.embed_dense(item["text"])
-                sparse = embed.embed_sparse_doc(item["text"])
+                dense = embed.embed_dense(text)
+                sparse = embed.embed_sparse_doc(text)
                 self.cloud.shards[shard].upsert(point_id, dense, sparse, payload)
                 self.cloud.shards[shard].optimize()
+                touched.add(shard)
                 dev.synced_updated_at[point_id] = payload.get("updated_at", 0)
                 pushed += 1
-                bytes_p += len(item["text"].encode()) + 400  # approx payload size
-            self.cloud.shards[shard].flush()
+                bytes_p += len(text.encode()) + 400  # approx payload size
+            for shard in touched:
+                self.cloud.shards[shard].flush()
             dev.queue = []
-            self.log(device_id, "sync", f"Pushed {pushed} point(s) to cloud",
-                     {"pushed": pushed, "bytes": bytes_p, "conflicts": new_conflicts})
+            self.log(device_id, "sync", f"Pushed {pushed} point(s) to cloud"
+                     + (f", held back {held} (deleted or now local-only)" if held else ""),
+                     {"pushed": pushed, "held": held, "bytes": bytes_p, "conflicts": new_conflicts})
         # ---- PULL (cloud -> edge) ----
         for shard_name in SHARD_DEFS:
             cloud_st = self.cloud.shards[shard_name]
@@ -723,16 +847,7 @@ class Fleet:
                 if local and local.get("origin_device") == device_id and \
                    local.get("updated_at", 0) > last_synced and \
                    local.get("updated_at", 0) != c_updated:
-                    conflict = {
-                        "id": f"c-{pid[:8]}-{int(time.time()*1000)}",
-                        "point_id": pid, "slug": cp.get("slug"), "shard": shard_name,
-                        "local": {"text": local.get("text",""), "updated_at": local.get("updated_at"),
-                                  "origin_device": device_id, "criticality": local.get("criticality")},
-                        "remote": {"text": cp.get("text",""), "updated_at": c_updated,
-                                   "origin_device": cp.get("origin_device"),
-                                   "criticality": cp.get("criticality")},
-                        "status": "open", "created_at": int(time.time()*1000),
-                    }
+                    conflict = self._conflict(pid, cp.get("slug"), shard_name, local, cp, device_id)
                     dev.conflicts.append(conflict)
                     new_conflicts += 1
                     self.log(device_id, "conflict",
@@ -797,35 +912,58 @@ class Fleet:
         c = next((x for x in dev.conflicts if x["id"] == conflict_id), None)
         if not c:
             return {"ok": False, "reason": "not found"}
+        if c.get("status") != "open":
+            return {"ok": False, "reason": "already resolved"}
+        if resolution not in ("local", "remote", "merge"):
+            return {"ok": False, "reason": "resolution must be local, remote or merge"}
         pid = c["point_id"]; shard = c["shard"]
+        if shard not in dev.shards:
+            return {"ok": False, "reason": "unknown shard"}
         if resolution == "local":
             chosen = c["local"]; text = chosen["text"]
         elif resolution == "remote":
             chosen = c["remote"]; text = chosen["text"]
         else:  # merge
-            text = merged_text or c["local"]["text"]
+            text = merged_text if isinstance(merged_text, str) and merged_text else c["local"]["text"]
             chosen = {**c["local"], "text": text}
+        # keep the local point's real tags (sensitivity above all): the
+        # residency decision is made on what the device actually holds
+        current = dev.shards[shard].retrieve_payload(pid) or {}
+        current.pop("_id", None)
         now = int(time.time() * 1000)
-        payload = {
-            "slug": c["slug"], "text": text, "shard": shard,
-            "domain": c["shard"].rstrip("s") if c["shard"].endswith("s") else c["shard"],
-            "criticality": chosen.get("criticality", "medium"),
-            "sensitivity": "internal", "origin_device": device_id,
-            "updated_at": now, "sync_state": "queued",
-        }
+        payload = {**current,
+                   "slug": c["slug"], "text": text,
+                   "domain": current.get("domain") or (shard.rstrip("s") if shard.endswith("s") else shard),
+                   "criticality": chosen.get("criticality") or current.get("criticality") or "medium",
+                   "sensitivity": norm_sensitivity(current.get("sensitivity") or c["local"].get("sensitivity")),
+                   "origin_device": device_id, "updated_at": now}
+        decision = evaluate_policy(payload, self.policy)
+        local_only = decision["sync_state"] == "local_only"
+        if not local_only and not dev.online:
+            return {"ok": False, "reason": "offline — reconnect to resolve and sync"}
+        payload["sync_state"] = decision["sync_state"]
         dense = embed.embed_dense(text); sparse = embed.embed_sparse_doc(text)
         dev.shards[shard].upsert(pid, dense, sparse, payload)
         dev.shards[shard].optimize()
-        dev.synced_updated_at[pid] = now
-        # also push resolved version to cloud
-        self.cloud.shards[shard].upsert(pid, dense, sparse, payload)
-        self.cloud.shards[shard].optimize()
+        self._dequeue(dev, pid)
+        if local_only:
+            # never touches the cloud; remember the remote version we saw so
+            # the next pull doesn't raise the same conflict again
+            dev.synced_updated_at[pid] = max(dev.synced_updated_at.get(pid, 0),
+                                             _count(c["remote"].get("updated_at")))
+        else:
+            self.cloud.shards[shard].upsert(pid, dense, sparse, payload)
+            self.cloud.shards[shard].optimize()
+            dev.synced_updated_at[pid] = now
         c["status"] = "resolved"; c["resolution"] = resolution
+        c["scope"] = "local" if local_only else "synced"
         dev.save_meta()
-        self.log(device_id, "conflict", f"Conflict '{c['slug']}' resolved ({resolution}) and synced",
-                 {"conflict_id": conflict_id, "resolution": resolution})
-        return {"ok": True}
         self._invalidate_contrib()
+        self.log(device_id, "conflict",
+                 f"Conflict '{c['slug']}' resolved ({resolution}) "
+                 + (f"on-device only — {decision['reason']}" if local_only else "and synced"),
+                 {"conflict_id": conflict_id, "resolution": resolution, "decision": decision})
+        return {"ok": True, "synced": not local_only}
 
     def sync_status(self, device_id: str) -> Dict[str, Any]:
         dev = self.devices[device_id]
@@ -857,7 +995,7 @@ class Fleet:
                 recs, offset = st.scroll(limit=200, offset=offset)
                 for r in recs:
                     p = dict(r.payload or {})
-                    if p.get("sync_state") == "local_only":
+                    if p.get("sync_state") == "local_only" or stays_local(p, self.policy):
                         out["excluded_local_only"] += 1
                         continue
                     p["_id"] = str(r.id)
@@ -872,32 +1010,57 @@ class Fleet:
         return out
 
     def import_snapshot(self, device_id: str, snap: Dict[str, Any]) -> Dict[str, Any]:
-        """Load a snapshot onto a device. Reuses write_point so policy tagging,
-        queueing and logging behave exactly as for a locally authored note."""
+        """Load a snapshot onto a device. New ids go through write_point so
+        policy tagging, queueing and logging behave exactly as for a locally
+        authored note, stamped with *this* device's clock (a file-supplied
+        updated_at could mask a real divergence at the cloud). An id the
+        device already holds is never overwritten: identical text is a no-op,
+        different text becomes a conflict for a human to resolve."""
         if not isinstance(snap, dict) or snap.get("format") != "edge-mem-snapshot":
             return {"ok": False, "reason": "not an edge-mem snapshot"}
-        imported = skipped = 0
+        dev = self.devices[device_id]
+        imported = skipped = unchanged = conflicts = 0
         seen: Dict[str, int] = {}
-        for shard, rows in (snap.get("shards") or {}).items():
-            if shard not in SHARD_DEFS:
-                skipped += len(rows)
+        shards = snap.get("shards")
+        for shard, rows in (shards.items() if isinstance(shards, dict) else []):
+            if shard not in SHARD_DEFS or not isinstance(rows, list):
+                skipped += len(rows) if isinstance(rows, list) else 1
                 continue
             for p in rows:
-                pid = p.get("_id") or p.get("point_id") or p.get("id")
-                text = p.get("text", "")
-                if not pid or not text:
+                if not isinstance(p, dict):
                     skipped += 1
                     continue
-                body = {k: v for k, v in p.items() if k not in ("_id", "point_id", "id", "text")}
-                ua = p.get("updated_at")
-                self.write_point(device_id, shard, body, text=text, point_id=str(pid),
-                                 origin_device=p.get("origin_device"),
-                                 updated_at=ua if isinstance(ua, int) else None)
+                pid = p.get("_id") or p.get("point_id") or p.get("id")
+                text = p.get("text", "")
+                if not pid or not isinstance(text, str) or not text:
+                    skipped += 1
+                    continue
+                pid = str(pid)
+                local = dev.shards[shard].retrieve_payload(pid)
+                if local is not None:
+                    if local.get("text") == text:
+                        unchanged += 1
+                    else:
+                        c = self._conflict(pid, local.get("slug"), shard, local,
+                                           {**p, "origin_device": p.get("origin_device") or snap.get("device")},
+                                           device_id, source="snapshot")
+                        dev.conflicts.append(c)
+                        conflicts += 1
+                        self.log(device_id, "conflict",
+                                 f"Snapshot import diverges from local '{local.get('slug')}' — conflict raised",
+                                 {"shard": shard, "conflict_id": c["id"]})
+                        continue
+                else:
+                    body = {k: v for k, v in p.items() if k not in ("_id", "point_id", "id", "text")}
+                    self.write_point(device_id, shard, body, text=text, point_id=pid,
+                                     origin_device=p.get("origin_device"))
                 imported += 1
                 seen[shard] = seen.get(shard, 0) + 1
+        if conflicts:
+            dev.save_meta()
         self._invalidate_contrib()
-        return {"ok": True, "imported": imported, "skipped": skipped,
-                "source_device": snap.get("device"), "shards": seen}
+        return {"ok": True, "imported": imported, "unchanged": unchanged, "conflicts": conflicts,
+                "skipped": skipped, "source_device": snap.get("device"), "shards": seen}
 
     # -- TTL retention --
     def run_retention(self, device_id: Optional[str] = None) -> Dict[str, Any]:
@@ -920,11 +1083,13 @@ class Fleet:
                 checked += 1
                 if now - int((r.payload or {}).get("updated_at", 0)) > ttl_ms:
                     if st.delete_point(str(r.id)):
+                        self._dequeue(dev, str(r.id))
                         expired += 1
             if not offset:
                 break
         if expired:
             st.optimize(); st.flush()
+            dev.save_meta()
         self._retention = {"expired_total": self._retention.get("expired_total", 0) + expired,
                            "last_run": now, "ttl_seconds": ttl_s}
         if expired:
@@ -1008,6 +1173,7 @@ class Fleet:
             return {"ok": False, "reason": "unknown shard"}
         ok = st.delete_point(point_id)
         if ok:
+            self._dequeue(dev, point_id)
             self.log(device_id, "write", f"Deleted point {point_id[:12]}… from {shard}",
                      {"shard": shard, "point_id": point_id, "action": "delete"})
             dev.save_meta()
@@ -1042,5 +1208,5 @@ class Fleet:
         dev.synced_updated_at[pid] = now - 2000  # pretend last sync was before both edits
         dev.save_meta()
         self.log(device_id, "demo", f"Manufactured divergent edits on '{slug}' (alpha vs beta) — run sync to surface conflict", {})
-        return {"ok": True, "slug": slug, "shard": shard}
         self._invalidate_contrib()
+        return {"ok": True, "slug": slug, "shard": shard}

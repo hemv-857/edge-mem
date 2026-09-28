@@ -200,7 +200,7 @@ function DeviceCard({ d, active }: { d: FleetData["devices"][number]; active: bo
             <Meta label="last sync" value={formatRelative(d.last_sync_at)} />
             <Meta label="pushed" value={formatBytes(d.bytes_pushed)} accent={d.bytes_pushed > 0 ? "emerald" : undefined} />
           </div>
-          {d.shards.length > 0 && (
+          {Array.isArray(d.shards) && d.shards.length > 0 && (
             <div className="mt-3 flex items-center gap-1.5">
               {d.shards.map((s) => {
                 const meta = SHARD_META[s.name];

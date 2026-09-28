@@ -9,6 +9,8 @@ export const runtime = "nodejs";
 
 const ENGINE = process.env.EDGE_URL ?? "http://localhost:3030";
 const TICK_MS = 1000;
+const FETCH_TIMEOUT_MS = 5000;
+const HEADERS: HeadersInit = process.env.EDGE_TOKEN ? { "x-edge-token": process.env.EDGE_TOKEN } : {};
 
 interface Snapshot {
   ts: number;
@@ -25,10 +27,13 @@ interface EngineState {
   devices?: { total_points?: number; reachable?: boolean }[];
 }
 
+type Event = { event: "metrics" | "error"; data: unknown };
+
 async function snap(): Promise<Snapshot> {
+  const init = { cache: "no-store", headers: HEADERS, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) } as const;
   const [st, ss] = await Promise.all([
-    fetch(`${ENGINE}/api/edge/state`, { cache: "no-store" }).then((r) => r.json() as Promise<EngineState>),
-    fetch(`${ENGINE}/api/edge/sync-status`, { cache: "no-store" }).then((r) => r.json() as Promise<{ queue_depth?: number; open_conflicts?: unknown[] }>),
+    fetch(`${ENGINE}/api/edge/state`, init).then((r) => r.json() as Promise<EngineState>),
+    fetch(`${ENGINE}/api/edge/sync-status`, init).then((r) => r.json() as Promise<{ queue_depth?: number; open_conflicts?: unknown[] }>),
   ]);
   const devices = st.devices ?? [];
   return {
@@ -42,52 +47,65 @@ async function snap(): Promise<Snapshot> {
   };
 }
 
+// One poller shared by every open stream: N browser tabs cost the single-threaded
+// engine one request pair per tick, not N. A tick is skipped while one is in flight.
+let latest: Event | null = null;
+let inflight = false;
+let timer: ReturnType<typeof setInterval> | null = null;
+const listeners = new Set<(e: Event) => void>();
+
+async function tick() {
+  if (inflight) return;
+  inflight = true;
+  try {
+    latest = { event: "metrics", data: await snap() };
+  } catch {
+    latest = { event: "error", data: { ts: Date.now(), reason: "edge-engine unreachable" } };
+  } finally {
+    inflight = false;
+  }
+  for (const l of listeners) l(latest);
+}
+
+function subscribe(fn: (e: Event) => void): () => void {
+  listeners.add(fn);
+  if (latest) fn(latest);
+  if (!timer) {
+    timer = setInterval(tick, TICK_MS);
+    void tick();
+  }
+  return () => {
+    listeners.delete(fn);
+    if (!listeners.size && timer) {
+      clearInterval(timer);
+      timer = null;
+      latest = null; // don't greet the next subscriber with a stale snapshot
+    }
+  };
+}
+
 export async function GET() {
   const encoder = new TextEncoder();
-  let closed = false;
+  let cleanup = () => {};
 
   const stream = new ReadableStream({
-    async start(controller) {
+    start(controller) {
       const send = (event: string, data: unknown) => {
-        if (closed) return;
         try {
           controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
         } catch {
-          closed = true;
+          cleanup(); // client gone
         }
       };
-      const beat = async () => {
-        try {
-          send("metrics", await snap());
-        } catch {
-          send("error", { ts: Date.now(), reason: "edge-engine unreachable" });
-        }
-      };
-
-      await beat();
-      const timer = setInterval(beat, TICK_MS);
+      const unsubscribe = subscribe((e) => send(e.event, e.data));
       const keepalive = setInterval(() => send("ping", { ts: Date.now() }), 15000);
-
-      // hold the response open until the client disconnects (cancel() fires)
-      await new Promise<void>((resolve) => {
-        const poll = setInterval(() => {
-          if (closed) {
-            clearInterval(poll);
-            resolve();
-          }
-        }, 400);
-      });
-
-      clearInterval(timer);
-      clearInterval(keepalive);
-      try {
-        controller.close();
-      } catch {
-        /* already closed */
-      }
+      cleanup = () => {
+        unsubscribe();
+        clearInterval(keepalive);
+      };
     },
     cancel() {
-      closed = true;
+      cleanup();
     },
   });
 

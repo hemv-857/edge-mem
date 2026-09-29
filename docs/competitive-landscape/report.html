@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>EDGE.MEM Competitive Landscape</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: ops-console report. Status strip up top, sticky section index on the left, findings on the right; the capability matrix is the one wide element. */
+:root {
+  --bg: #0b100f; --surface: #111917; --surface-2: #16201d; --line: #23312d; --fg: #e4ece8; --muted: #8b9c95;
+  --ok: #34d399; --ok-soft: rgba(52, 211, 153, .12); --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, .12);
+  --crit: #fb7185; --crit-soft: rgba(251, 113, 133, .12); --self: rgba(52, 211, 153, .07);
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+  --bg: #f5f7f6; --surface: #ffffff; --surface-2: #eef2f0; --line: #d8e0dc; --fg: #0f1a17; --muted: #56675f;
+  --ok: #047857; --ok-soft: rgba(4, 120, 87, .1); --warn: #b45309; --warn-soft: rgba(180, 83, 9, .1);
+  --crit: #be123c; --crit-soft: rgba(190, 18, 60, .09); --self: rgba(4, 120, 87, .06); color-scheme: light;
+} }
+:root[data-theme="light"] {
+  --bg: #f5f7f6; --surface: #ffffff; --surface-2: #eef2f0; --line: #d8e0dc; --fg: #0f1a17; --muted: #56675f;
+  --ok: #047857; --ok-soft: rgba(4, 120, 87, .1); --warn: #b45309; --warn-soft: rgba(180, 83, 9, .1);
+  --crit: #be123c; --crit-soft: rgba(190, 18, 60, .09); --self: rgba(4, 120, 87, .06); color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.6 var(--f-body); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 64px; }
+a { color: var(--ok); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--ok); outline-offset: 2px; }
+code, .mono { font-family: var(--f-mono); font-size: .86em; }
+code { background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 .3em; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+p { margin: 0; }
+
+/* Header */
+.eyebrow { font: 500 12px/1 var(--f-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.eyebrow .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+header h1 { font-size: clamp(34px, 5vw, 52px); font-weight: 700; margin-top: 14px; letter-spacing: -.01em; }
+header h1 span { color: var(--ok); }
+.lede { margin-top: 12px; max-width: 68ch; color: var(--muted); font-size: 16px; }
+.strip { margin-top: 26px; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow: hidden; }
+.strip div { padding: 14px 16px; border-right: 1px solid var(--line); min-width: 0; }
+.strip div:last-child { border-right: 0; }
+.strip b { display: block; font: 600 24px/1.1 var(--f-mono); font-variant-numeric: tabular-nums; }
+.strip small { display: block; margin-top: 6px; color: var(--muted); font-size: 12.5px; line-height: 1.35; }
+.strip .ok b { color: var(--ok); } .strip .warn b { color: var(--warn); } .strip .crit b { color: var(--crit); }
+
+/* Body grid */
+.grid { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 48px; margin-top: 44px; }
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 20px); align-self: start; font-size: 13.5px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; border-left: 1px solid var(--line); }
+nav.toc a { display: flex; gap: 10px; padding: 5px 12px; color: var(--muted); text-decoration: none; margin-left: -1px; border-left: 2px solid transparent; }
+nav.toc a:hover { color: var(--fg); border-left-color: var(--ok); }
+nav.toc a span { font-family: var(--f-mono); color: var(--ok); opacity: .8; }
+main { display: grid; gap: 56px; min-width: 0; }
+section { display: grid; gap: 18px; min-width: 0; scroll-margin-top: 20px; }
+.sec-head { display: flex; align-items: baseline; gap: 12px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+.sec-head .n { font: 600 13px var(--f-mono); color: var(--ok); }
+.sec-head h2 { font-size: 26px; font-weight: 600; }
+.prose { max-width: 72ch; display: grid; gap: 12px; }
+.note { font-size: 13.5px; color: var(--muted); max-width: 80ch; }
+
+/* Findings */
+.findings { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.findings li { background: var(--surface); padding: 16px 18px; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; }
+.findings .k { font: 600 13px/1.6 var(--f-mono); color: var(--muted); }
+.findings strong { color: var(--fg); }
+.findings li.flag .k { color: var(--crit); }
+
+/* Tables */
+.tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+thead th { font: 600 11.5px/1.3 var(--f-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); white-space: nowrap; }
+td.name { font-weight: 600; min-width: 190px; }
+td.name small { display: block; font-weight: 400; color: var(--muted); font-size: 12.5px; }
+
+/* Matrix */
+.filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.filters button { font: 500 12.5px var(--f-mono); color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.filters button:hover { color: var(--fg); }
+.filters button[aria-pressed="true"] { color: var(--bg); background: var(--ok); border-color: var(--ok); }
+.matrix th.cap, .matrix td.cap { text-align: center; white-space: normal; min-width: 84px; }
+.matrix thead th.cap { white-space: normal; }
+.matrix td { vertical-align: middle; }
+.matrix tr.self td { background: var(--self); }
+.matrix tr.self td.name { box-shadow: inset 3px 0 0 var(--ok); }
+.c { display: inline-grid; place-items: center; min-width: 30px; height: 24px; padding: 0 7px; border-radius: 5px; font: 600 12px var(--f-mono); }
+.c.y { color: var(--ok); background: var(--ok-soft); }
+.c.n { color: var(--crit); background: var(--crit-soft); }
+.c.q { color: var(--warn); background: var(--warn-soft); }
+.c.na { color: var(--muted); }
+.c.x { color: var(--crit); border: 1px dashed var(--crit); }
+.c.m { color: var(--warn); border: 1px dashed var(--warn); }
+.conf { font: 500 12px var(--f-mono); padding: 3px 8px; border-radius: 4px; white-space: nowrap; }
+.conf.hi { color: var(--ok); background: var(--ok-soft); }
+.conf.md { color: var(--warn); background: var(--warn-soft); }
+.conf.lo { color: var(--crit); background: var(--crit-soft); }
+.grp { font: 500 11.5px var(--f-mono); color: var(--muted); white-space: nowrap; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); align-items: center; }
+.legend span { display: inline-flex; gap: 7px; align-items: center; }
+.callout { border: 1px solid var(--line); border-left: 3px solid var(--warn); background: var(--surface); border-radius: 6px; padding: 14px 16px; font-size: 14.5px; max-width: 80ch; }
+
+/* Groups */
+.groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+.group { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.group .tag { font: 600 12px var(--f-mono); color: var(--ok); letter-spacing: .04em; }
+.group h3 { font-size: 18px; font-weight: 600; }
+.group .members { font-size: 13.5px; }
+.group p.why { font-size: 13.5px; color: var(--muted); }
+
+/* Two-column compare */
+.split { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.panel h3 { font-size: 17px; font-weight: 600; display: flex; gap: 10px; align-items: center; }
+.panel h3::before { content: ""; width: 10px; height: 10px; border-radius: 2px; background: var(--ok); }
+.panel.behind h3::before { background: var(--crit); }
+.panel ul { margin: 0; padding-left: 18px; display: grid; gap: 8px; font-size: 14.5px; }
+.panel li::marker { color: var(--muted); }
+
+/* Recommendations */
+.steps { counter-reset: s; list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+.steps li::before { content: counter(s, decimal-leading-zero); font: 600 13px/1.6 var(--f-mono); color: var(--ok); }
+.kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+
+footer { margin-top: 64px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; }
+
+@media (max-width: 880px) {
+  .grid { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  nav.toc { position: static; }
+  nav.toc ol { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); border-left: 0; }
+  .strip div { border-bottom: 1px solid var(--line); }
+}
+@media (max-width: 480px) {
+  .wrap { padding-inline: 16px; }
+  .findings li, .steps li { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+}
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow"><i class="dot"></i> Competitive landscape <span>·</span> as of 2026-09-29 <span>·</span> first pass</div>
+    <h1>EDGE<span>.</span>MEM against the edge-sync market</h1>
+    <p class="lede">Who a buyer could pick instead of EDGE.MEM, what each one can provably do, and where the evidence stops. Every cell traces to a row in <code>docs/competitive-landscape/landscape.csv</code> with its source, evidence type and confidence.</p>
+    <div class="strip" role="list">
+      <div role="listitem"><b>15</b><small>competitors tracked across 5 groups</small></div>
+      <div role="listitem" class="ok"><b>6</b><small>rows at high confidence</small></div>
+      <div role="listitem" class="crit"><b>6</b><small>rows at low or low-medium confidence</small></div>
+      <div role="listitem" class="warn"><b>0</b><small>competitors confirmed with the full capability set</small></div>
+      <div role="listitem"><b>10</b><small>open questions with a named place to check</small></div>
+    </div>
+  </header>
+
+  <div class="grid">
+    <nav class="toc" aria-label="Sections">
+      <ol>
+        <li><a href="#summary"><span>01</span>Summary</a></li>
+        <li><a href="#method"><span>02</span>Evidence rules</a></li>
+        <li><a href="#who"><span>03</span>Competitor groups</a></li>
+        <li><a href="#matrix"><span>04</span>Capability matrix</a></li>
+        <li><a href="#pricing"><span>05</span>Pricing</a></li>
+        <li><a href="#position"><span>06</span>Ahead and behind</a></li>
+        <li><a href="#gaps"><span>07</span>Hypotheses</a></li>
+        <li><a href="#implications"><span>08</span>Implications</a></li>
+        <li><a href="#open"><span>09</span>Unresolved</a></li>
+      </ol>
+    </nav>
+
+    <main>
+      <section id="summary">
+        <div class="sec-head"><span class="n">01</span><h2>Executive summary</h2></div>
+        <ol class="findings">
+          <li><span class="k">1</span><p><strong>EDGE.MEM is an application on top of Qdrant Edge, not a vector database.</strong> Its competitors are stacks a customer could assemble from an embedded DB plus a sync layer, vertical field-service AI products that solve the same technician problem, and Qdrant itself.</p></li>
+          <li><span class="k">2</span><p><strong>The closest assembled rivals are Couchbase Lite + Sync Gateway and ObjectBox + Sync.</strong> Both have on-device vector search and a commercial sync product, and both are more mature than anything here. Couchbase Lite also documents hybrid (vector + full-text) search.</p></li>
+          <li><span class="k">3</span><p><strong>The one differentiator that holds up in code is residency:</strong> a rule engine with a non-editable floor that stops <code>restricted</code> notes ever syncing, plus explicit conflict cards. It is not yet proven unique. Selective sync (Couchbase) and conflict handling (ObjectBox, Turso) were not examined deeply enough to rule out equivalents.</p></li>
+          <li><span class="k">4</span><p><strong>Two new facts change the picture.</strong> Actian launched VectorAI DB on 2026-04-28 aimed at regulated, air-gapped edge (vendor claims SOC 2 Type II, HIPAA, GDPR, ISO 27001). MongoDB retired Atlas Device Sync on 2025-09-30 (secondary sources), leaving Realm users looking for a replacement.</p></li>
+          <li class="flag"><span class="k">5</span><p><strong>The commercial blockers are in this repo, not the market:</strong> no LICENSE file, no auth or RBAC, and a dependency on Qdrant Edge, which its vendor still labels beta with no licensing terms on the pages reviewed.</p></li>
+        </ol>
+      </section>
+
+      <section id="method">
+        <div class="sec-head"><span class="n">02</span><h2>Method and evidence rules</h2></div>
+        <div class="tbl"><table>
+          <thead><tr><th>Evidence tag</th><th>Meaning</th><th>Use externally?</th></tr></thead>
+          <tbody>
+            <tr><td><code>primary-page</code></td><td>Vendor page or docs fetched and read on the as-of date</td><td><span class="conf hi">Yes</span> quote with date</td></tr>
+            <tr><td><code>vendor-claim</code></td><td>Vendor's own marketing or benchmark (e.g. "22x faster")</td><td><span class="conf md">Qualified</span> only as "vendor claims"</td></tr>
+            <tr><td><code>secondary</code> / <code>search-summary</code></td><td>Third-party site or search-result summary; the vendor page was not read</td><td><span class="conf lo">No</span> verify first</td></tr>
+            <tr><td><code>vendor-comparison</code></td><td>A rival's blog about competitors (Actian on LanceDB and Chroma)</td><td><span class="conf lo">No</span> biased</td></tr>
+            <tr><td><code>repo-verified</code></td><td>Checked in this repository, with tests</td><td><span class="conf hi">Yes</span></td></tr>
+          </tbody>
+        </table></div>
+        <div class="prose note">
+          <p><b>No composite score.</b> The landscape gives capability facts and evidence quality only; weighted scores would need weights the business hasn't set. <code>check.py</code> fails any row whose <code>last_verified</code> is older than 90 days. To update: edit the CSV, run <code>python3 docs/competitive-landscape/check.py --matrix</code>, and bump <code>last_verified</code> only for rows you re-read.</p>
+        </div>
+      </section>
+
+      <section id="who">
+        <div class="sec-head"><span class="n">03</span><h2>Who the competitors are</h2></div>
+        <div class="groups">
+          <div class="group"><span class="tag">A · DIRECT</span><h3>Assembled edge-sync stacks</h3><p class="members">Couchbase Lite + Sync Gateway, ObjectBox + Sync, Turso, Actian VectorAI DB</p><p class="why">A buyer can get on-device vector search plus sync without EDGE.MEM.</p></div>
+          <div class="group"><span class="tag">B · SUBSTITUTES</span><h3>Embedded vector DBs, DIY sync</h3><p class="members">LanceDB, Chroma, Milvus Lite, sqlite-vec</p><p class="why">Free and popular; the customer builds sync, conflicts and policy themselves.</p></div>
+          <div class="group"><span class="tag">C · INDIRECT</span><h3>Field-service and connected-worker AI</h3><p class="members">Aquant, PTC ServiceMax AI, Siemens Industrial Copilot, Dozuki, Augmentir</p><p class="why">Same user pain, sold as SaaS. Aquant's page makes no offline claim; the others were not read at source.</p></div>
+          <div class="group"><span class="tag">D · PLATFORM</span><h3>Qdrant Edge / Qdrant Cloud</h3><p class="members">The engine EDGE.MEM runs on</p><p class="why">Supplies the engine and could add sync policy or a console itself.</p></div>
+          <div class="group"><span class="tag">E · DISPLACED</span><h3>MongoDB Realm / Device Sync</h3><p class="members">Ended 2025-09-30</p><p class="why">A segment of apps looking for a replacement.</p></div>
+        </div>
+        <p class="note">Not covered yet (add if a buyer names them): Weaviate embedded, pgvector with ElectricSQL or PowerSync, AWS IoT Greengrass and Azure IoT Edge with local RAG, local-LLM RAG apps (AnythingLLM, Ollama-based), CMMS vendors with AI (Fiix, Limble).</p>
+      </section>
+
+      <section id="matrix">
+        <div class="sec-head"><span class="n">04</span><h2>Capability matrix</h2></div>
+        <div class="filters" role="group" aria-label="Filter by group">
+          <button type="button" id="f-all" data-g="all" aria-pressed="true">All 16</button>
+          <button type="button" id="f-direct" data-g="direct" aria-pressed="false">Direct</button>
+          <button type="button" id="f-sub" data-g="sub" aria-pressed="false">Substitutes</button>
+          <button type="button" id="f-ind" data-g="ind" aria-pressed="false">Indirect</button>
+          <button type="button" id="f-other" data-g="other" aria-pressed="false">Platform and displaced</button>
+        </div>
+        <div class="tbl"><table class="matrix">
+          <thead><tr><th>Competitor</th><th class="cap">On-device vector</th><th class="cap">Hybrid search</th><th class="cap">Sync to server</th><th class="cap">Selective sync</th><th class="cap">Conflict handling</th><th class="cap">Ops console</th><th>Confidence</th></tr></thead>
+          <tbody id="mx"></tbody>
+        </table></div>
+        <div class="legend">
+          <span><i class="c y">Y</i> a source states it</span>
+          <span><i class="c n">N</i> stated absent, or no sync at all</span>
+          <span><i class="c q">?</i> not stated in sources reviewed (not the same as no)</span>
+          <span><i class="c na">n.a.</i> not applicable to the category</span>
+        </div>
+        <p class="callout">No competitor in this set is confirmed to offer all of on-device vector search, hybrid search, two-way sync, selective sync <b>and</b> conflict handling. That describes what the sources reviewed say; it does not prove no product does. The EDGE.MEM row is checked against the repo, and its clean look reflects a hackathon-scope feature set, not maturity.</p>
+      </section>
+
+      <section id="pricing">
+        <div class="sec-head"><span class="n">05</span><h2>Pricing (verified figures only)</h2></div>
+        <div class="tbl"><table>
+          <thead><tr><th>Vendor</th><th>Model</th><th>Verified figures</th><th>Source quality</th></tr></thead>
+          <tbody>
+            <tr><td class="name">Turso</td><td>Tiered usage</td><td class="mono">Free $0 (5 GB, 500M reads, 10M writes, 3 GB syncs) · Developer $4.99/mo · Scaler $24.92/mo · Pro $416.58/mo · Enterprise custom</td><td><span class="conf hi">Primary</span></td></tr>
+            <tr><td class="name">Qdrant Cloud</td><td>Free tier, usage-based Standard, min-spend Premium, Hybrid/Private</td><td>Free = <span class="mono">0.5 vCPU / 1 GB RAM / 4 GB disk</span>; Standard 99.5% SLA; Premium 99.9% SLA; no prices listed</td><td><span class="conf hi">Primary</span></td></tr>
+            <tr><td class="name">ObjectBox</td><td>Free Apache-2.0 core, paid Sync</td><td>Sync price not published (contact sales)</td><td><span class="conf hi">Primary</span></td></tr>
+            <tr><td class="name">Actian VectorAI DB</td><td>Free Community Edition, 30-day trial, Enterprise</td><td>Commercial price not published</td><td><span class="conf md">Press</span></td></tr>
+            <tr><td class="name">Couchbase</td><td>Capella per node-hour; Lite EE per licensed device</td><td>Per-hour figures seen only on aggregators</td><td><span class="conf lo">Unverified</span></td></tr>
+            <tr><td class="name">LanceDB</td><td>OSS free, Cloud usage-based, Enterprise custom</td><td>Not verified on the vendor site</td><td><span class="conf lo">Search summary</span></td></tr>
+            <tr><td class="name">Aquant, ServiceMax, Siemens, Dozuki, Augmentir</td><td>Enterprise SaaS</td><td>Not published</td><td><span class="c na">n.a.</span></td></tr>
+          </tbody>
+        </table></div>
+        <p class="note">The pattern the evidence supports: a free or open core, with money charged for sync, hosting or enterprise features. The billable metric varies: rows and synced GB (Turso), node-hours (Couchbase Capella), per licensed device (Couchbase Lite EE).</p>
+      </section>
+
+      <section id="position">
+        <div class="sec-head"><span class="n">06</span><h2>Where EDGE.MEM is ahead, and where it is behind</h2></div>
+        <div class="split">
+          <div class="panel"><h3>Differentiated</h3><p class="note">Repo-verified; not contradicted by the sources reviewed.</p>
+            <ul>
+              <li><b>Residency as policy:</b> an editable rule table on top of a hard floor for <code>restricted</code> data, enforced at push, resolve, export and import, with tests.</li>
+              <li><b>Sync that never silently overwrites:</b> one open conflict card per note; local, remote or 3-way merge; bootstrap keeps unsynced edits.</li>
+              <li><b>Fleet visibility:</b> a console for memory, search score breakdown, queue, conflicts and activity, plus federation across devices.</li>
+              <li><b>Hybrid dense + BM25 on the device</b> with a per-result score breakdown.</li>
+            </ul></div>
+          <div class="panel behind"><h3>Competitors are stronger</h3><p class="note">Where a buyer would reasonably pick someone else today.</p>
+            <ul>
+              <li><b>Maturity and support:</b> Couchbase, ObjectBox and Actian ship documented products. Actian claims compliance certifications; EDGE.MEM has none.</li>
+              <li><b>Platform reach:</b> native mobile and embedded SDKs (ObjectBox, Couchbase Lite). EDGE.MEM is a Python engine plus a web console.</li>
+              <li><b>Price of entry:</b> Turso Free, sqlite-vec and Milvus Lite cost nothing and need no server.</li>
+              <li><b>Finished workflows:</b> Aquant ships conversational troubleshooting, voice, analytics and customer references.</li>
+              <li><b>Engine risk:</b> the vector engine is beta at its vendor, and that vendor could add these layers.</li>
+            </ul></div>
+        </div>
+      </section>
+
+      <section id="gaps">
+        <div class="sec-head"><span class="n">07</span><h2>Gaps and segments</h2></div>
+        <p class="note">Hypotheses to validate, not findings.</p>
+        <div class="tbl"><table>
+          <thead><tr><th>Hypothesis</th><th>Evidence so far</th><th>What would confirm it</th></tr></thead>
+          <tbody>
+            <tr><td class="name">Regulated or industrial sites want a provable "this data never leaves the device" control</td><td>The repo implements it. Actian's positioning stresses regulated and air-gapped use and says it has no sync dependency (whether it offers sync at all is unverified).</td><td>5 to 10 interviews with plant IT/OT or security leads; check Couchbase channels and Sync Gateway sync functions for an equivalent</td></tr>
+            <tr><td class="name">Realm / Device Sync refugees need an edge-sync replacement</td><td>Retirement on 2025-09-30 (secondary sources)</td><td>Size the affected apps; confirm EDGE.MEM can serve them (it has no mobile SDK today)</td></tr>
+            <tr><td class="name">Field-service AI vendors lack offline, so offline-first retrieval is a wedge</td><td>Aquant's page makes no offline claim; ServiceMax and Siemens pages not read</td><td>Read those product docs and sales material</td></tr>
+            <tr><td class="name">Teams choosing DIY (Chroma, LanceDB, sqlite-vec) hit a wall on sync and conflicts</td><td>Those products have no built-in sync per the sources reviewed</td><td>Interview teams that adopted them</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="implications">
+        <div class="sec-head"><span class="n">08</span><h2>Strategic implications</h2></div>
+        <h3 style="font-size:18px">Product, ordered by what unblocks the rest</h3>
+        <ol class="steps">
+          <li><p><b>Decide the license</b> (currently none) and read the Qdrant Edge terms for redistribution. Until then nothing here is commercially usable.</p></li>
+          <li><p><b>Verify the residency differentiator</b> against Couchbase channels and ObjectBox and Turso sync filtering before making it the headline.</p></li>
+          <li><p><b>Close the trust gap Actian is selling into:</b> authentication and roles (PRD S9), and an audit trail of what left the device. Certifications are a business decision; the audit trail is engineering.</p></li>
+          <li><p><b>Reduce engine dependence:</b> keep the storage layer behind a narrow interface so a beta change or a Qdrant move doesn't strand the product.</p></li>
+        </ol>
+        <div class="kv">
+          <div class="panel"><h3>Positioning</h3><p><i>"Offline knowledge memory for industrial sites where some notes must never leave the device."</i></p><p class="note">An assumption that needs a decision. It is credible only after steps 01 and 02. Avoid "vector database" language; that is the ground of Qdrant, ObjectBox, Couchbase and Actian.</p></div>
+          <div class="panel"><h3>Pricing</h3><p>Options, not a recommendation. The market charges for sync, hosting or enterprise features over a free core.</p><p class="note">Candidate metrics: per device, per synced GB, per fleet. Choosing one needs unit economics and buyer input that this repo does not contain.</p></div>
+        </div>
+      </section>
+
+      <section id="open">
+        <div class="sec-head"><span class="n">09</span><h2>Unresolved, with where to check</h2></div>
+        <div class="tbl"><table>
+          <thead><tr><th>#</th><th>Question</th><th>Where to look</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">01</td><td>Does Couchbase selective sync (channels, sync functions) match the residency guarantee?</td><td>Couchbase Sync Gateway docs</td></tr>
+            <tr><td class="mono">02</td><td>Does ObjectBox Sync carry vectors, and does ObjectBox support hybrid search?</td><td>ObjectBox docs and changelog</td></tr>
+            <tr><td class="mono">03</td><td>Qdrant Edge: licence, redistribution rights, and GA date</td><td>Qdrant Edge docs, GitHub, sales contact</td></tr>
+            <tr><td class="mono">04</td><td>MongoDB EOL date from MongoDB's own docs (primary pages returned 403/404)</td><td>mongodb.com docs and support</td></tr>
+            <tr><td class="mono">05</td><td>LanceDB: built-in sync? (the claim came from a rival's blog.) Chroma: hybrid and sync?</td><td>LanceDB and Chroma docs</td></tr>
+            <tr><td class="mono">06</td><td>Actian VectorAI DB: sync, hybrid search, real pricing, and the benchmark method behind "22x"</td><td>Actian docs, sales</td></tr>
+            <tr><td class="mono">07</td><td>ServiceMax AI, Siemens Industrial Copilot, Dozuki, Augmentir: offline support and pricing</td><td>Vendor pages (fetch was blocked or only summaries were read)</td></tr>
+            <tr><td class="mono">08</td><td>Couchbase Capella and Lite EE real prices</td><td>couchbase.com/pricing</td></tr>
+            <tr><td class="mono">09</td><td>Customer segments and willingness to pay</td><td>Buyer interviews (no data in the repo)</td></tr>
+            <tr><td class="mono">10</td><td>The e2e audit was not re-run for this pass, so the EDGE.MEM row rests on unit tests</td><td><code>python3 tests/audit/audit.py</code></td></tr>
+          </tbody>
+        </table></div>
+        <p class="callout">Rows tagged <span class="conf lo">Low</span> confidence in the CSV should not appear in any external document until re-read at source.</p>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <span>Source: <code>docs/COMPETITIVE-LANDSCAPE.md</code> and <code>docs/competitive-landscape/landscape.csv</code></span>
+    <span class="mono">researched 2026-09-29 · stale after 90 days</span>
+  </footer>
+</div>
+
+<script>
+// One row per CSV entry. Cells: y / n / q(?) / na / x (ended) / m (manual).
+const ROWS = [
+  ["Qdrant Edge", "Platform", "other", "yyyqqq", "hi"],
+  ["Couchbase Lite + Sync Gateway", "Direct", "direct", "yyyqqq", "md"],
+  ["ObjectBox + Sync", "Direct", "direct", "yqyqyq", "hi"],
+  ["Turso", "Direct", "direct", "yqyqyq", "hi"],
+  ["Actian VectorAI DB", "Direct, new entrant", "direct", "yqqqqq", "md"],
+  ["MongoDB Device Sync / Realm", "Displaced", "other", ["na","na","x","na","na","na"], "md"],
+  ["LanceDB", "Substitute", "sub", "yynnnq", "lm"],
+  ["Chroma", "Substitute", "sub", "ynnnnq", "lo"],
+  ["Milvus Lite", "Substitute", "sub", ["y","y","m","n","n","q"], "hi"],
+  ["sqlite-vec", "Substitute", "sub", "yqnnnq", "hi"],
+  ["Aquant", "Indirect", "ind", ["na","na","na","na","na","y"], "hi"],
+  ["PTC ServiceMax AI", "Indirect", "ind", ["na","na","na","na","na","q"], "lo"],
+  ["Siemens Industrial Copilot", "Indirect", "ind", ["na","na","na","na","na","q"], "lo"],
+  ["Dozuki", "Indirect", "ind", ["na","na","na","na","na","y"], "lo"],
+  ["Augmentir", "Indirect", "ind", ["na","na","na","na","na","y"], "lo"],
+  ["EDGE.MEM", "This project, repo-verified", "self", "yyyyyy", "hi"],
+];
+const GLYPH = { y: "Y", n: "N", q: "?", na: "n.a.", x: "Ended", m: "Manual" };
+const CONF = { hi: ["hi", "High"], md: ["md", "Medium"], lm: ["lo", "Low-Med"], lo: ["lo", "Low"] };
+const tbody = document.getElementById("mx");
+tbody.innerHTML = ROWS.map(([name, grp, g, cells, conf]) => {
+  const cs = Array.isArray(cells) ? cells : [...cells];
+  return `<tr data-g="${g}" class="${g === "self" ? "self" : ""}"><td class="name">${name}<small>${grp}</small></td>` +
+    cs.map(c => `<td class="cap"><span class="c ${c}">${GLYPH[c]}</span></td>`).join("") +
+    `<td><span class="conf ${CONF[conf][0]}">${CONF[conf][1]}</span></td></tr>`;
+}).join("");
+document.querySelectorAll(".filters button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".filters button").forEach(x => x.setAttribute("aria-pressed", x === b));
+  tbody.querySelectorAll("tr").forEach(tr => {
+    tr.hidden = !(b.dataset.g === "all" || tr.dataset.g === b.dataset.g || tr.dataset.g === "self");
+  });
+}));
+</script>

@@ -37,6 +37,21 @@ jobs:
       - run: bunx prisma generate
       - run: bunx tsc --noEmit
 
+  # Engine logic (sync, residency, cloud outage, HTTP surface) with qdrant_edge /
+  # fastembed / qdrant_client stubbed: fast, no models or servers.
+  engine-unit:
+    name: engine unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: |
+          for t in mini-services/edge-engine/tests/test_*.py; do
+            echo "== $t"; python "$t"
+          done
+
   e2e:
     name: e2e audit
     runs-on: ubuntu-latest

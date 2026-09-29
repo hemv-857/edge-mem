@@ -463,3 +463,21 @@ Verification:
 Stage Summary:
 - Both previously-skipped items are now done and covered by the suite: retention ticks on its own, and peer federation is URL-addressed with a non-loopback proof (enforced where the host allows it).
 - CI is green-by-construction: lint, a real typecheck gate, and the full 124-check Playwright audit as an e2e job.
+
+---
+Task ID: production-audit-run-2
+Agent: main (audit against problem statement 03 — offline-first Qdrant Edge memory)
+Task: Audit the repo against the hackathon statement and fix engineering gaps.
+
+Fixed (each has a regression in `mini-services/edge-engine/tests/`):
+- **False conflict on every edit of a pulled note** — push compared `updated_at` with the cloud copy's, so any edit of a note another device authored raised a conflict. Now a conflict needs the cloud copy to have moved since this device last synced it.
+- **Duplicate conflict cards** — a push conflict was re-raised by the pull step (and again on later syncs). `_raise_conflict` keeps one open card per note and refreshes it.
+- **Bootstrap silently overwrote unsynced local edits** — now raises a conflict instead (PRD: never silent overwrite).
+- **Other devices' cloud writes were never pulled** — `QdrantCloudShard.manifest_hash` cached until *this* process wrote. Sync now asks for a fresh hash; polled stats use a 30 s TTL.
+- **Cloud outage broke the offline console** — `/state` and `/fleet` 500'd when Qdrant was down (and each poll waited out the client timeout on a single thread). `cloud_stats()` + circuit breaker answer from cache; sync/bootstrap/resolve return `{ok:false}` with the queue intact; Cloud tab returns 503.
+- **Torn state files** — `meta.json` (queue, conflicts) and `activity.json` are written atomically; the residency-critical ones fsync.
+- **Shard load failure deleted all local memory** — now moved to `<shard>.corrupt-<ts>`.
+- **Policy reset on restart** — persisted to `data/policy.json`, validated on load.
+- Engine claimed "Auto-sync triggered on reconnection" but did nothing; log now says what is true, and `EDGE_AUTOSYNC_INTERVAL` adds a real opt-in headless sync.
+- UI: sync/bootstrap/resolve failures were silent (and the demo toast hard-coded "12 points"); the hook now toasts the real result; the auto-sync loop backs off 30 s after a failure.
+- Removed dead, broken `Device.get_point/delete_point`. CI now runs the Python unit tests.

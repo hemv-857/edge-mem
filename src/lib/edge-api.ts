@@ -80,7 +80,7 @@ export const edge = {
   }) => edgePost<WriteResult>("write", p),
   connectivity: (device: string, online: boolean) => edgePost<{ online: boolean }>("connectivity", { device, online }),
   sync: (device: string) => edgePost<ReturnType<typeof Object> & { ok?: boolean; pushed?: number; pulled?: number; new_conflicts?: number; reason?: string }>("sync", { device }),
-  bootstrap: (device: string) => edgePost<{ ok: boolean; pulled: number; bytes_pulled: number; reason?: string }>("bootstrap", { device }),
+  bootstrap: (device: string) => edgePost<{ ok: boolean; pulled: number; bytes_pulled: number; conflicts?: number; reason?: string }>("bootstrap", { device }),
   syncStatus: (device?: string) => edgeGet<SyncStatus>("sync-status", { device }),
   resolveConflict: (device: string, conflict_id: string, resolution: "local" | "remote" | "merge", merged_text?: string) =>
     edgePost<{ ok: boolean }>("conflict/resolve", { device, conflict_id, resolution, merged_text }),

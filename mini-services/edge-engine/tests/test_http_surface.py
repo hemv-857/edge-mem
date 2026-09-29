@@ -79,6 +79,22 @@ def main():
     assert M.validate_policy(pol()) is not None
     assert M.validate_policy(pol(crit, r1)) is not None
     assert M.validate_policy(pol({**r1, "action": "queued"})) is not None
+
+    # opt-in background sync: only online devices with a queue, exponential backoff on failure
+    dev = mock.Mock(online=True, queue=[1], id="d")
+    M.fleet = mock.Mock(devices={"d": dev})
+    M.AUTOSYNC_INTERVAL, M._next_autosync_at = 10, 0
+    M.fleet.sync.return_value = {"ok": False}
+    M.autosync_tick()
+    assert M.fleet.sync.call_count == 1 and M._autosync_fails == 1
+    assert 19 < M._next_autosync_at - time.time() <= 20   # 10s * 2**1
+    M.autosync_tick()                                       # not due yet
+    assert M.fleet.sync.call_count == 1
+    M._next_autosync_at = 0
+    dev.online = False
+    M.autosync_tick()                                       # offline: nothing to try, counts as healthy
+    assert M.fleet.sync.call_count == 1 and M._autosync_fails == 0
+    M.AUTOSYNC_INTERVAL = 0
     print("ok")
 
 

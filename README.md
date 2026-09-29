@@ -93,6 +93,8 @@ Everything except distill/auto-tag works with no LLM and no network.
 | `EDGE_PEER_HOST` | `localhost` | Federated peer address — set to another host to federate across machines |
 | `EDGE_FEDERATION_AUTO` | `1` | Spawn the peer locally (only when `EDGE_PEER_HOST` is `localhost`) |
 | `EDGE_RETENTION_INTERVAL` | `15` | Background TTL sweep interval in seconds (`0` disables) |
+| `EDGE_AUTOSYNC_INTERVAL` | `0` (off) | Seconds between headless sync attempts for any online device with a queue; failures back off (×2, max 10 min). Off = sync only from the console / `POST /sync` |
+| `QDRANT_MANIFEST_TTL` | `30` | Seconds a polled cloud manifest hash is reused (sync always re-reads, so other devices' writes are seen) |
 | `FEDERATED_PEERS` | `device-beta=http://localhost:3031` | `name=url` pairs the fleet probes live |
 | `QDRANT_URL` | `http://localhost:6333` | Cloud backend; falls back to an embedded store when unreachable |
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | OpenAI | Cloud synthesis only |
@@ -116,6 +118,18 @@ full security model.
 
 ## Testing
 
+Engine logic has fast unit tests that need no models, Qdrant or Playwright
+(`qdrant_edge`, `fastembed` and `qdrant_client` are stubbed):
+
+```bash
+for t in mini-services/edge-engine/tests/test_*.py; do python3 "$t"; done
+```
+
+They cover the residency floor, sync/conflict integrity (no false or duplicate
+conflicts, bootstrap never overwrites an unsynced edit), cloud-outage behaviour,
+atomic state files, policy persistence, cross-device manifest freshness and the
+HTTP surface.
+
 The whole statement is covered by one Playwright audit:
 
 ```bash
@@ -125,10 +139,11 @@ python3 tests/audit/audit.py            # 124 checks, exit 0 = all green
 Screenshots land in `tests/audit/shots/`. It needs the engine and UI running,
 plus `pip install playwright && playwright install chromium`.
 
-**CI** (`.github/workflows/ci.yml`) runs three jobs on every push/PR:
+**CI** (`.github/workflows/ci.yml`) runs four jobs on every push/PR:
 
 | job | what |
 | --- | --- |
+| `engine-unit` | the Python unit tests above |
 | `lint` | `eslint .` |
 | `typecheck` | `prisma generate` + `tsc --noEmit` (clean gate, 0 allowed errors) |
 | `e2e audit` | boots Qdrant, both engines, `next dev`, and a stub LLM, then runs all 124 checks |
@@ -154,6 +169,13 @@ worklog.md                    per-task development log
 ## Notes
 
 - Runtime state under `mini-services/edge-engine/data/` is committed so a fresh
-  clone boots into the state the audit expects. `.qdrant/`, `.venv/` and audit
-  screenshots are not.
+  clone boots into the state the audit expects. `.qdrant/`, `.venv/`, audit
+  screenshots and the admin's `policy.json` are not.
+- **Offline provisioning:** the first boot downloads the pinned embedding model
+  into `EDGE_MODEL_DIR` (default `data/models`). A device that has never been
+  online needs that directory copied onto it (or a baked image) — after that it
+  starts and searches with no network.
+- The console keeps working when the cloud is down: cloud counts show the last
+  known values and the Cloud tab reports 503; sync/bootstrap/resolve fail
+  cleanly with the queue intact and the console tells you so.
 - See `worklog.md` for the reasoning behind each stage.

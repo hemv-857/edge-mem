@@ -16,7 +16,6 @@ import os
 import json
 import time
 import uuid
-import shutil
 import signal
 import hashlib
 import threading
@@ -77,6 +76,7 @@ REMOTE_MEMBERS = [
 # Peer probes run on the engine's only thread, so they are bounded in time and
 # size, never follow redirects, and only carry EDGE_TOKEN to peers we can trust
 # with it: loopback, https, or everything when EDGE_PEER_SEND_TOKEN=1.
+MAX_RESOLVED_CONFLICTS = 50
 PEER_DEADLINE_S = 2.0
 PEER_MAX_BYTES = 65536
 _LOOPBACK = ("localhost", "127.0.0.1", "::1")
@@ -140,6 +140,25 @@ def fetch_peer_json(url: str) -> Any:
 
 def _count(v: Any) -> int:
     return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else 0
+
+
+def atomic_write_json(path: str, obj: Any, durable: bool = True, **kw) -> None:
+    """Write JSON so a crash or power cut leaves either the old file or the new
+    one, never a torn half. durable=True also fsyncs (queue / conflicts / policy)."""
+    tmp = f"{path}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(obj, f, **kw)
+            if durable:
+                f.flush()
+                os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def clean_peer_entry(d: Any) -> Optional[Dict[str, Any]]:
@@ -245,9 +264,13 @@ def _open_or_create(path: str) -> EdgeShard:
     if has_data:
         try:
             return EdgeShard.load(path)
-        except Exception:
-            # corrupt/empty -> recreate
-            shutil.rmtree(path, ignore_errors=True)
+        except Exception as e:  # noqa: BLE001
+            # never delete a device's memory because a load failed: park it
+            # beside the shard for recovery and start a fresh one
+            parked = f"{path}.corrupt-{int(time.time())}"
+            print(f"[edge-engine] shard {path} failed to load ({type(e).__name__}); "
+                  f"moved to {parked}", flush=True)
+            os.replace(path, parked)
             os.makedirs(path, exist_ok=True)
     return EdgeShard.create(path, _new_config())
 
@@ -285,7 +308,9 @@ class ShardStore:
         ))
         return recs, nxt
 
-    def manifest_hash(self) -> str:
+    def manifest_hash(self, fresh: bool = False) -> str:
+        # `fresh` exists for interface parity with the Qdrant Server shard: the
+        # embedded store is only ever written by this process, so the dirty flag is exact.
         # Cache the manifest hash; recompute only after a write (upsert) marks
         # the shard dirty. snapshot_manifest() touches the binding and is called
         # on every polled memory_stats/fleet_overview, so caching it removes the
@@ -436,16 +461,15 @@ class Device:
 
     def save_meta(self):
         try:
-            with open(self._meta_path(), "w") as f:
-                json.dump({
-                    "online": self.online, "queue": self.queue,
-                    "last_sync_at": self.last_sync_at, "last_sync_summary": self.last_sync_summary,
-                    "bytes_pushed": self.bytes_pushed, "bytes_pulled": self.bytes_pulled,
-                    "last_manifests": self.last_manifests, "synced_updated_at": self.synced_updated_at,
-                    "conflicts": self.conflicts,
-                }, f, default=str)
-        except Exception:
-            pass
+            atomic_write_json(self._meta_path(), {
+                "online": self.online, "queue": self.queue,
+                "last_sync_at": self.last_sync_at, "last_sync_summary": self.last_sync_summary,
+                "bytes_pushed": self.bytes_pushed, "bytes_pulled": self.bytes_pulled,
+                "last_manifests": self.last_manifests, "synced_updated_at": self.synced_updated_at,
+                "conflicts": self.conflicts,
+            }, default=str)
+        except Exception as e:  # noqa: BLE001 — keep serving, but never fail silently
+            print(f"[edge-engine] WARNING: could not persist {self._meta_path()}: {e}", flush=True)
 
     def memory_stats(self) -> Dict[str, Any]:
         shards = {}
@@ -489,23 +513,6 @@ class Device:
                 "value": p.get("value"), "unit": p.get("unit"), "severity": p.get("severity"),
             })
         return out
-
-    def get_point(self, point_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch a single point's full payload (for the point detail drawer)."""
-        p = self.retrieve_payload(point_id)
-        if p is None:
-            return None
-        return p
-
-    def delete_point(self, point_id: str) -> bool:
-        """Delete a point by id (for the point detail drawer's delete action)."""
-        try:
-            self.shard.update(UpdateOperation.delete_points([point_id]))
-            self._dirty = True
-            self.shard.flush()
-            return True
-        except Exception:
-            return False
 
 
 def _dir_size(path: str) -> int:
@@ -588,10 +595,68 @@ class Fleet:
         self._peer_cache: Dict[str, Tuple[float, Optional[Dict[str, Any]]]] = {}
         self._peer_ttl = 4.0
         self._retention = {"expired_total": 0, "last_run": None, "ttl_seconds": None}
+        # cloud circuit breaker: a black-holed network makes every cloud call
+        # wait out QDRANT_TIMEOUT, and the engine is single-threaded — so after a
+        # failure, polled status calls answer from cache instead of re-probing
+        self._cloud_last: Optional[Dict[str, Any]] = None
+        self._cloud_down_until = 0.0
         self._load_activity()
 
     def _invalidate_contrib(self):
         self._contrib_cache = None
+
+    # -- policy persistence: an admin's residency rules must survive a restart --
+    def _policy_path(self):
+        return os.path.join(DATA_DIR, "policy.json")
+
+    def restore_policy(self, validate) -> bool:
+        """Load the saved policy if it exists and passes `validate` (returns an
+        error string or None). A bad file is ignored, never applied."""
+        try:
+            with open(self._policy_path()) as f:
+                saved = json.load(f)
+        except (OSError, ValueError):
+            return False
+        err = validate(saved)
+        if err:
+            print(f"[edge-engine] ignoring saved policy.json: {err}", flush=True)
+            return False
+        self.policy = saved
+        return True
+
+    def set_policy(self, policy: Dict[str, Any]) -> None:
+        atomic_write_json(self._policy_path(), policy)  # disk first: fail loudly, keep the old policy
+        self.policy = policy
+
+    # -- cloud reachability --
+    def _cloud_failed(self, cooldown: float = 15.0):
+        self._cloud_down_until = time.time() + cooldown
+
+    def cloud_stats(self) -> Dict[str, Any]:
+        """Cloud point counts for the console. Never raises: when the cloud is
+        down the last known numbers come back flagged reachable=False."""
+        if time.time() >= self._cloud_down_until:
+            try:
+                st = self.cloud.memory_stats()
+                self._cloud_last = st
+                return {**st, "reachable": True}
+            except Exception as e:  # noqa: BLE001
+                print(f"[edge-engine] cloud stats failed: {type(e).__name__}", flush=True)
+                self._cloud_failed()
+        return {**(self._cloud_last or {"total_points": 0, "shards": {}}), "reachable": False}
+
+    def _cloud_error(self, device_id: str, what: str, e: Exception) -> Dict[str, Any]:
+        """A cloud call failed mid-operation: nothing is lost (the queue is only
+        cleared after a full push), the device just stays a device."""
+        import traceback
+        traceback.print_exc()
+        self._cloud_failed()
+        dev = self.devices[device_id]
+        dev.save_meta()
+        self.log(device_id, "sync", f"{what} failed — cloud unreachable or erroring ({type(e).__name__}); "
+                 f"{len(dev.queue)} queued point(s) kept for retry", {"queue_depth": len(dev.queue)})
+        return {"ok": False, "reason": "cloud unreachable — local memory and queue are intact",
+                "queue_depth": len(dev.queue)}
 
     # -- federation: live peers ------------------------------------------
     def _peer_overview(self, url: str) -> Optional[Dict[str, Any]]:
@@ -642,11 +707,17 @@ class Fleet:
         now = time.time()
         if self._contrib_cache is not None and (now - self._contrib_ts) < 20:
             return self._contrib_cache
+        if now < self._cloud_down_until:
+            return self._contrib_cache or {}
         counts: Dict[str, int] = {}
-        for shard_name in SHARD_DEFS:
-            for p in self.cloud.all_points(shard_name):
-                o = p.get("origin_device", "unknown")
-                counts[o] = counts.get(o, 0) + 1
+        try:
+            for shard_name in SHARD_DEFS:
+                for p in self.cloud.all_points(shard_name):
+                    o = p.get("origin_device", "unknown")
+                    counts[o] = counts.get(o, 0) + 1
+        except Exception:  # noqa: BLE001 — cloud down: show the last known split
+            self._cloud_failed()
+            return self._contrib_cache or {}
         self._contrib_cache = counts
         self._contrib_ts = now
         return counts
@@ -673,8 +744,7 @@ class Fleet:
             if len(self.activity) > 500:
                 self.activity = self.activity[-500:]
             try:
-                with open(self._act_path(), "w") as f:
-                    json.dump(self.activity[-500:], f)
+                atomic_write_json(self._act_path(), self.activity[-500:], durable=False)
             except Exception:
                 pass
             return entry
@@ -702,6 +772,18 @@ class Fleet:
                 "local": side(local, local_device),
                 "remote": side(remote, remote.get("origin_device")),
                 "status": "open", "created_at": now, **extra}
+
+    @staticmethod
+    def _raise_conflict(dev: Device, c: Dict[str, Any]) -> bool:
+        """Record an open conflict. A note that already has one just gets its
+        card refreshed — stacking a second card for the same note is noise, and
+        resolving one would strand the other. True when a new card was raised."""
+        old = next((x for x in dev.conflicts if x["status"] == "open" and x["point_id"] == c["point_id"]), None)
+        if old:
+            old.update(local=c["local"], remote=c["remote"])
+            return False
+        dev.conflicts.append(c)
+        return True
 
     # -- write --
     def write_point(self, device_id: str, shard: str, payload: Dict[str, Any],
@@ -762,8 +844,9 @@ class Fleet:
         self.log(device_id, "connectivity",
                  f"Link {'ESTABLISHED' if online else 'LOST'} — device {'online' if online else 'offline'}",
                  {"was": was, "now": online})
-        if online and not was:
-            self.log(device_id, "sync", "Auto-sync triggered on reconnection", {})
+        if online and not was and dev.queue:
+            self.log(device_id, "sync", f"Link restored — {len(dev.queue)} queued point(s) ready to sync",
+                     {"queue_depth": len(dev.queue)})
         return {"online": online}
 
     # -- sync --
@@ -772,6 +855,14 @@ class Fleet:
         if not dev.online:
             self.log(device_id, "sync", "Sync blocked — device offline (queue retained)", {})
             return {"ok": False, "reason": "offline", "queue_depth": len(dev.queue)}
+        try:
+            res = self._sync(dev, device_id)
+        except Exception as e:  # noqa: BLE001 — the cloud is allowed to be down
+            return self._cloud_error(device_id, "Sync", e)
+        self._cloud_down_until = 0.0
+        return res
+
+    def _sync(self, dev: Device, device_id: str) -> Dict[str, Any]:
         pushed = 0; pulled = 0; bytes_p = 0; bytes_r = 0; new_conflicts = 0
         manifest_diffs: Dict[str, Any] = {}
         # ---- PUSH (edge -> cloud) ----
@@ -796,16 +887,19 @@ class Fleet:
                 # conflict check at cloud: does cloud already have this id from another device?
                 existing = self.cloud.shards[shard].retrieve_payload(point_id)
                 if existing and existing.get("origin_device") not in (None, device_id):
-                    # remote version from another device exists
-                    if existing.get("updated_at", 0) != payload.get("updated_at"):
+                    # another device's version is in the cloud. It only diverges
+                    # from ours if it moved on since this device last saw it —
+                    # improving a note we pulled is a normal update, not a conflict.
+                    e_upd = existing.get("updated_at", 0)
+                    if e_upd > dev.synced_updated_at.get(point_id, 0) and e_upd != payload.get("updated_at"):
                         # genuine divergence -> record conflict, do NOT silently overwrite
                         conflict = self._conflict(point_id, payload.get("slug"), shard,
                                                   payload, existing, device_id)
-                        dev.conflicts.append(conflict)
-                        new_conflicts += 1
-                        self.log(device_id, "conflict",
-                                 f"Conflict detected on '{payload.get('slug')}' — edited on {device_id} and {existing.get('origin_device')}",
-                                 {"shard": shard, "conflict_id": conflict["id"]})
+                        if self._raise_conflict(dev, conflict):
+                            new_conflicts += 1
+                            self.log(device_id, "conflict",
+                                     f"Conflict detected on '{payload.get('slug')}' — edited on {device_id} and {existing.get('origin_device')}",
+                                     {"shard": shard, "conflict_id": conflict["id"]})
                         pushed += 1  # count as processed
                         continue
                 # no conflict -> upsert to cloud
@@ -827,7 +921,7 @@ class Fleet:
         for shard_name in SHARD_DEFS:
             cloud_st = self.cloud.shards[shard_name]
             dev_st = dev.shards[shard_name]
-            cur_hash = cloud_st.manifest_hash()
+            cur_hash = cloud_st.manifest_hash(fresh=True)  # other devices write too
             last_hash = dev.last_manifests.get(shard_name)
             changed = cur_hash != last_hash
             manifest_diffs[shard_name] = {"changed": changed, "cloud_hash": cur_hash[:12],
@@ -848,11 +942,11 @@ class Fleet:
                    local.get("updated_at", 0) > last_synced and \
                    local.get("updated_at", 0) != c_updated:
                     conflict = self._conflict(pid, cp.get("slug"), shard_name, local, cp, device_id)
-                    dev.conflicts.append(conflict)
-                    new_conflicts += 1
-                    self.log(device_id, "conflict",
-                             f"Pulled '{cp.get('slug')}' but local copy diverged — conflict raised",
-                             {"shard": shard_name, "conflict_id": conflict["id"]})
+                    if self._raise_conflict(dev, conflict):
+                        new_conflicts += 1
+                        self.log(device_id, "conflict",
+                                 f"Pulled '{cp.get('slug')}' but local copy diverged — conflict raised",
+                                 {"shard": shard_name, "conflict_id": conflict["id"]})
                     continue
                 # no conflict -> upsert into device (re-embed from text)
                 text = cp.get("text", "")
@@ -885,13 +979,32 @@ class Fleet:
         dev = self.devices[device_id]
         if not dev.online:
             return {"ok": False, "reason": "offline"}
-        pulled = 0; bytes_r = 0
+        try:
+            res = self._bootstrap(dev, device_id)
+        except Exception as e:  # noqa: BLE001
+            return self._cloud_error(device_id, "Bootstrap", e)
+        self._cloud_down_until = 0.0
+        return res
+
+    def _bootstrap(self, dev: Device, device_id: str) -> Dict[str, Any]:
+        pulled = 0; bytes_r = 0; conflicts = 0
         for shard_name in SHARD_DEFS:
             cloud_st = self.cloud.shards[shard_name]
             dev_st = dev.shards[shard_name]
             for cp in self.cloud.all_points(shard_name):
                 pid = cp.get("_id")
                 text = cp.get("text", "")
+                # never silently overwrite a local edit that hasn't reached the cloud
+                local = dev_st.retrieve_payload(pid)
+                if local and local.get("text") != text and \
+                   local.get("updated_at", 0) > dev.synced_updated_at.get(pid, 0):
+                    c = self._conflict(pid, cp.get("slug"), shard_name, local, cp, device_id)
+                    if self._raise_conflict(dev, c):
+                        conflicts += 1
+                        self.log(device_id, "conflict",
+                                 f"Bootstrap found '{cp.get('slug')}' diverged from the local copy — conflict raised",
+                                 {"shard": shard_name, "conflict_id": c["id"]})
+                    continue
                 dense = embed.embed_dense(text)
                 sparse = embed.embed_sparse_doc(text)
                 dev_st.upsert(pid, dense, sparse, cp)
@@ -903,9 +1016,10 @@ class Fleet:
         dev.bytes_pulled += bytes_r
         dev.last_sync_at = int(time.time() * 1000)
         dev.save_meta()
-        self.log(device_id, "bootstrap", f"Bootstrapped device from cloud snapshot — {pulled} points pulled",
-                 {"pulled": pulled, "bytes": bytes_r})
-        return {"ok": True, "pulled": pulled, "bytes_pulled": bytes_r}
+        self.log(device_id, "bootstrap", f"Bootstrapped device from cloud snapshot — {pulled} points pulled"
+                 + (f", {conflicts} conflict(s) raised" if conflicts else ""),
+                 {"pulled": pulled, "bytes": bytes_r, "conflicts": conflicts})
+        return {"ok": True, "pulled": pulled, "bytes_pulled": bytes_r, "conflicts": conflicts}
 
     def resolve_conflict(self, device_id: str, conflict_id: str, resolution: str, merged_text: Optional[str] = None) -> Dict[str, Any]:
         dev = self.devices[device_id]
@@ -943,6 +1057,13 @@ class Fleet:
             return {"ok": False, "reason": "offline — reconnect to resolve and sync"}
         payload["sync_state"] = decision["sync_state"]
         dense = embed.embed_dense(text); sparse = embed.embed_sparse_doc(text)
+        if not local_only:
+            # cloud first: if it is down nothing has changed and the card stays open
+            try:
+                self.cloud.shards[shard].upsert(pid, dense, sparse, payload)
+                self.cloud.shards[shard].optimize()
+            except Exception as e:  # noqa: BLE001
+                return self._cloud_error(device_id, "Conflict resolution", e)
         dev.shards[shard].upsert(pid, dense, sparse, payload)
         dev.shards[shard].optimize()
         self._dequeue(dev, pid)
@@ -952,10 +1073,13 @@ class Fleet:
             dev.synced_updated_at[pid] = max(dev.synced_updated_at.get(pid, 0),
                                              _count(c["remote"].get("updated_at")))
         else:
-            self.cloud.shards[shard].upsert(pid, dense, sparse, payload)
-            self.cloud.shards[shard].optimize()
             dev.synced_updated_at[pid] = now
         c["status"] = "resolved"; c["resolution"] = resolution
+        # resolved cards are history, and sync-status returns them on every poll
+        done = [x for x in dev.conflicts if x["status"] != "open"]
+        if len(done) > MAX_RESOLVED_CONFLICTS:
+            drop = {id(x) for x in done[:-MAX_RESOLVED_CONFLICTS]}
+            dev.conflicts = [x for x in dev.conflicts if id(x) not in drop]
         c["scope"] = "local" if local_only else "synced"
         dev.save_meta()
         self._invalidate_contrib()
@@ -1044,11 +1168,11 @@ class Fleet:
                         c = self._conflict(pid, local.get("slug"), shard, local,
                                            {**p, "origin_device": p.get("origin_device") or snap.get("device")},
                                            device_id, source="snapshot")
-                        dev.conflicts.append(c)
-                        conflicts += 1
-                        self.log(device_id, "conflict",
-                                 f"Snapshot import diverges from local '{local.get('slug')}' — conflict raised",
-                                 {"shard": shard, "conflict_id": c["id"]})
+                        if self._raise_conflict(dev, c):
+                            conflicts += 1
+                            self.log(device_id, "conflict",
+                                     f"Snapshot import diverges from local '{local.get('slug')}' — conflict raised",
+                                     {"shard": shard, "conflict_id": c["id"]})
                         continue
                 else:
                     body = {k: v for k, v in p.items() if k not in ("_id", "point_id", "id", "text")}
@@ -1122,8 +1246,7 @@ class Fleet:
         # remote members: live probe when federated, static record otherwise
         for m in self.remote_members:
             devices.append(self.remote_member_entry(m))
-        cloud = self.cloud.memory_stats()
-        return {"devices": devices, "cloud": cloud, "active_device": self.active_device}
+        return {"devices": devices, "cloud": self.cloud_stats(), "active_device": self.active_device}
 
     def search(self, device_id: str, shard: str, query: str, mode: str = "hybrid",
                limit: int = 5, filters: Optional[Dict[str, Any]] = None,

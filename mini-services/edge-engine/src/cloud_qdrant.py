@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit, urlunsplit
 
@@ -28,6 +29,10 @@ SPARSE_NAME = embed.SPARSE_NAME
 COLLECTION_PREFIX = "edge-"
 DEFAULT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 DEFAULT_TIMEOUT = float(os.environ.get("QDRANT_TIMEOUT", "3"))
+# How long a polled (status-panel) manifest hash may be reused. Other devices
+# write to the same server from their own processes, so it cannot be cached
+# until *our* next write; sync always asks for a fresh one.
+MANIFEST_TTL_S = float(os.environ.get("QDRANT_MANIFEST_TTL", "30"))
 
 
 def redact_url(url: str) -> str:
@@ -81,6 +86,7 @@ class QdrantCloudShard:
         self.collection = f"{COLLECTION_PREFIX}{name}"
         self._storage_root = storage_root
         self._hash: Optional[str] = None
+        self._hash_at = 0.0
         self._dirty = True
         self._ensure_collection()
 
@@ -179,9 +185,11 @@ class QdrantCloudShard:
                         "updated_at": p.get("updated_at")})
         return out
 
-    def manifest_hash(self) -> str:
-        """Data-derived hash so manifest-diff pull notices cloud changes."""
-        if self._hash is not None and not self._dirty:
+    def manifest_hash(self, fresh: bool = False) -> str:
+        """Data-derived hash so manifest-diff pull notices cloud changes —
+        including other devices' writes, hence the TTL and the fresh flag."""
+        if not fresh and self._hash is not None and not self._dirty \
+                and time.monotonic() - self._hash_at < MANIFEST_TTL_S:
             return self._hash
         rows: List[List[Any]] = []
         offset = None
@@ -194,6 +202,7 @@ class QdrantCloudShard:
                 break
         rows.sort()
         self._hash = hashlib.md5(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+        self._hash_at = time.monotonic()
         self._dirty = False
         return self._hash
 

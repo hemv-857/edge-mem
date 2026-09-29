@@ -45,9 +45,20 @@ leave the device.
 | S5 | Bounded request size / LLM spend | Done — 8 MB body, 8000-char LLM input |
 | S6 | Standard browser hardening headers | Done — XFO, nosniff, referrer, permissions |
 | S7 | Restricted data never syncs | Enforced by policy r1 + audit |
-| S8 | Secrets never committed | Open — `.env` is tracked despite `.env*` ignore; keep keys out of it |
+| S8 | Secrets never committed | Done — `.env` untracked, `.env.example` holds placeholders |
 | S9 | Auth for UI / role separation (admin vs technician) for policy + cloud delete | Open |
 | S10 | Snapshot import can set arbitrary `origin_device` (provenance spoofing) | Open — accepted for handoff; sign snapshots if it matters |
+
+## Resilience requirements
+| # | Requirement | Status |
+| --- | --- | --- |
+| R1 | A cloud outage never breaks local search/write or the console (last-known cloud counts, `reachable:false`, 503 on Cloud tab) | Done — circuit breaker, `test_sync_integrity.py` |
+| R2 | Queue, conflicts and policy survive a crash or power cut (atomic writes) | Done |
+| R3 | A shard that fails to load is quarantined (`<shard>.corrupt-<ts>`), never deleted | Done |
+| R4 | Admin policy survives an engine restart (`data/policy.json`, re-validated on load) | Done |
+| R5 | Sync never silently overwrites: editing a pulled note is a normal update, a true divergence raises exactly one card, bootstrap keeps unsynced local edits | Done |
+| R6 | Sync notices other devices' cloud writes (fresh manifest per sync) | Done |
+| R7 | Devices sync on their own when the link returns | Opt-in — `EDGE_AUTOSYNC_INTERVAL` (default off; product decision) |
 
 ## UX requirements
 - Every async action shows pending, success and failure states.

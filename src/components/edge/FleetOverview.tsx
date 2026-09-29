@@ -482,8 +482,7 @@ function DemoWalkthrough({ edge }: { edge: EdgeHook }) {
     try {
       switch (step.action) {
         case "bootstrap":
-          await edge.bootstrap();
-          toast({ title: "Bootstrapped", description: "Pulled 12 points from cloud" });
+          await edge.bootstrap(); // the hook reports the real pulled count
           break;
         case "offline":
           await edge.setOnline(false);

@@ -70,8 +70,9 @@ def h_health(body, qs):
         "engine": "qdrant_edge (EdgeShard) + FastEmbed + BM25",
         "dense_model": embed.DENSE_MODEL, "dense_dim": embed.DENSE_DIM,
         "runtime": "single-threaded http.server (main thread)",
-        "retention_interval_s": RETENTION_INTERVAL,
-        "bind": BIND,
+        "retention_interval_s": RETENTION_INTERVAL, "autosync_interval_s": AUTOSYNC_INTERVAL,
+        "bind": BIND, "auth_required": bool(TOKEN),
+        "cloud_reachable": time.time() >= fleet._cloud_down_until,  # last observation, no probe
     }
 
 def h_state(body, qs):
@@ -81,7 +82,7 @@ def h_state(body, qs):
             for d in fleet.devices.values()]
     remote = [fleet.remote_member_entry(m) for m in fleet.remote_members]
     return 200, {"active_device": fleet.active_device, "devices": live + remote,
-                 "cloud": fleet.cloud.memory_stats(), "policy": fleet.policy,
+                 "cloud": fleet.cloud_stats(), "policy": fleet.policy,
                  "shard_defs": E.SHARD_DEFS}
 
 def h_fleet(body, qs):
@@ -152,7 +153,7 @@ def h_conflict_resolve(body, qs):
                                  body.get("conflict_id"), body.get("resolution"),
                                  body.get("merged_text"))
     if not res["ok"]:
-        return 404, res
+        return (503 if "cloud" in res.get("reason", "") else 404), res
     return 200, res
 
 def h_demo_conflict(body, qs):
@@ -213,9 +214,13 @@ def h_put_policy(body, qs):
     err = validate_policy(body)
     if err:
         return 400, {"error": err}
-    fleet.policy = body
+    fleet.set_policy(body)
     fleet.log("system", "policy", "Policy rules updated", {})
     return 200, fleet.policy
+
+
+if fleet.restore_policy(validate_policy):
+    print("[edge-engine] policy restored from policy.json", flush=True)
 
 def h_simulate_policy(body, qs):
     """Simulate a point's tags against the policy rules — returns the matched
@@ -276,16 +281,33 @@ def _cloud_view(p: Dict[str, Any], score: Optional[float] = None) -> Dict[str, A
     return row
 
 
+def _cloud_guard(fn):
+    """A cloud outage is an expected state, not a crash: answer 503 so the
+    console can say so, and keep the traceback in the server log."""
+    def wrapped(body, qs):
+        try:
+            return fn(body, qs)
+        except (ValueError, TypeError, KeyError):
+            raise  # a bad request or a bug, not an outage: let the 500 path report it
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+            fleet._cloud_failed()
+            return 503, {"error": "cloud unreachable", "reachable": False}
+    wrapped.__name__ = fn.__name__
+    return wrapped
+
+
 def h_cloud_collections(body, qs):
-    ms = fleet.cloud.memory_stats()
+    ms = fleet.cloud_stats()
     url = getattr(fleet.cloud, "url", None)
     cols = [{"collection": f"{COLLECTION_PREFIX}{k}", "shard": k, **v}
             for k, v in ms["shards"].items()]
     return 200, {"backend": "qdrant-server" if url else "embedded-edge",
                  "url": url, "total_points": ms["total_points"],
-                 "collections": cols}
+                 "reachable": ms["reachable"], "collections": cols}
 
 
+@_cloud_guard
 def h_cloud_points(body, qs):
     shard = _shard_for(qs.get("collection", ["edge-incidents"])[0])
     if not shard:
@@ -301,6 +323,7 @@ def h_cloud_points(body, qs):
                  "total": len(pts), "points": [_cloud_view(p) for p in pts[:limit]]}
 
 
+@_cloud_guard
 def h_cloud_search(body, qs):
     shard = _shard_for(body.get("collection") or "")
     if not shard:
@@ -314,6 +337,7 @@ def h_cloud_search(body, qs):
                  "mode": body.get("mode", "hybrid"), "points": hits}
 
 
+@_cloud_guard
 def h_cloud_delete(body, qs):
     shard = _shard_for(body.get("collection") or "")
     pid = body.get("id")
@@ -512,6 +536,32 @@ def retention_tick() -> None:
         traceback.print_exc()
 
 
+# Opt-in background sync: pushes a device's queue as soon as it is online and
+# has something to send, so a device with nobody at the console still catches up
+# when connectivity returns. Same main-thread ticker as retention; failures back
+# off exponentially (a dead cloud must not keep the single-threaded engine busy).
+# 0 (default) leaves syncing to the console / POST /api/edge/sync.
+AUTOSYNC_INTERVAL = max(0, int(os.environ.get("EDGE_AUTOSYNC_INTERVAL", "0")))
+AUTOSYNC_MAX_BACKOFF = 600
+_next_autosync_at = time.time() + AUTOSYNC_INTERVAL
+_autosync_fails = 0
+
+
+def autosync_tick() -> None:
+    global _next_autosync_at, _autosync_fails
+    if not AUTOSYNC_INTERVAL or time.time() < _next_autosync_at:
+        return
+    ok = True
+    try:
+        ok = all(fleet.sync(d.id).get("ok") for d in list(fleet.devices.values()) if d.online and d.queue)
+    except Exception:  # noqa: BLE001 — a failed tick must never kill the server
+        traceback.print_exc()
+        ok = False
+    _autosync_fails = 0 if ok else _autosync_fails + 1
+    delay = AUTOSYNC_INTERVAL if ok else min(AUTOSYNC_INTERVAL * 2 ** _autosync_fails, AUTOSYNC_MAX_BACKOFF)
+    _next_autosync_at = time.time() + delay
+
+
 class EdgeHTTPServer(HTTPServer):
     # Larger listen backlog so the single-threaded server doesn't refuse
     # connections while busy on a slow request (sync/bootstrap/embed).
@@ -520,9 +570,14 @@ class EdgeHTTPServer(HTTPServer):
 
     def service_actions(self) -> None:
         retention_tick()
+        autosync_tick()
 
 
 def main():
+    if not TOKEN and BIND not in ("127.0.0.1", "localhost", "::1"):
+        print(f"[edge-engine] WARNING: listening on {BIND} with no EDGE_TOKEN — anyone who can reach "
+              f":{PORT} can read/write memory, edit policy and delete cloud data. Set EDGE_TOKEN "
+              f"or EDGE_BIND=127.0.0.1.", flush=True)
     server = EdgeHTTPServer((BIND, PORT), Handler)
     server.socket.setsockopt(__import__("socket").IPPROTO_TCP, __import__("socket").TCP_NODELAY, 1)
     print(f"[edge-engine] listening on http://{BIND}:{PORT} (single-threaded, main thread, backlog=128)", flush=True)

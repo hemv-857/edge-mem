@@ -21,6 +21,7 @@ export default function SyncConsole({ edge }: { edge: EdgeHook }) {
   const [autoSync, setAutoSync] = useState(false);
   const [intervalSec, setIntervalSec] = useState(30);
   const lastAutoSyncRef = useRef<number>(0);
+  const retryAfterRef = useRef<number>(0); // back off after a failed sync (cloud down)
 
   // Auto-sync effect: when enabled + online + queue has items, sync on interval
   useEffect(() => {
@@ -29,9 +30,12 @@ export default function SyncConsole({ edge }: { edge: EdgeHook }) {
       const now = Date.now();
       const queueDepth = edge.syncStatus?.queue_depth ?? 0;
       const isOnline = edge.syncStatus?.online ?? false;
-      if (isOnline && !edge.busy && (queueDepth > 0 || now - lastAutoSyncRef.current >= intervalSec * 1000)) {
+      if (isOnline && !edge.busy && now >= retryAfterRef.current &&
+          (queueDepth > 0 || now - lastAutoSyncRef.current >= intervalSec * 1000)) {
         lastAutoSyncRef.current = now;
-        try { await edge.sync(); } catch { /* best-effort */ }
+        try {
+          if (!(await edge.sync())) retryAfterRef.current = now + 30_000;
+        } catch { retryAfterRef.current = now + 30_000; }
       }
     }, 2000); // check every 2s
     return () => clearInterval(id);
@@ -428,7 +432,7 @@ function Row({ icon, label, value, accent }: { icon: React.ReactNode; label: str
   );
 }
 
-function ConflictCard({ c, onResolve, busy }: { c: Conflict; onResolve: (id: string, r: "local" | "remote" | "merge", t?: string) => Promise<void>; busy: string | null }) {
+function ConflictCard({ c, onResolve, busy }: { c: Conflict; onResolve: (id: string, r: "local" | "remote" | "merge", t?: string) => Promise<boolean>; busy: string | null }) {
   const [mergeText, setMergeText] = useState("");
   const [showMerge, setShowMerge] = useState(false);
 
@@ -467,15 +471,15 @@ function ConflictCard({ c, onResolve, busy }: { c: Conflict; onResolve: (id: str
       )}
 
       <div className="mt-2 flex flex-wrap gap-1.5">
-        <Button size="sm" variant="outline" disabled={!!busy} onClick={() => onResolve(c.id, "local").then(() => toast({ title: "Kept local version" }))}
+        <Button size="sm" variant="outline" disabled={!!busy} onClick={() => onResolve(c.id, "local").then((ok) => ok && toast({ title: "Kept local version" }))}
           className="gap-1 border-amber-500/30 bg-amber-500/5 font-mono text-[10px] text-amber-300 hover:bg-amber-500/10">
           <Check className="h-3 w-3" /> Keep local
         </Button>
-        <Button size="sm" variant="outline" disabled={!!busy} onClick={() => onResolve(c.id, "remote").then(() => toast({ title: "Kept remote version" }))}
+        <Button size="sm" variant="outline" disabled={!!busy} onClick={() => onResolve(c.id, "remote").then((ok) => ok && toast({ title: "Kept remote version" }))}
           className="gap-1 border-sky-500/30 bg-sky-500/5 font-mono text-[10px] text-sky-300 hover:bg-sky-500/10">
           <ArrowDown className="h-3 w-3" /> Keep remote
         </Button>
-        <Button size="sm" variant="outline" disabled={!!busy} onClick={() => { if (!showMerge) { setMergeText(c.local.text); setShowMerge(true); } else onResolve(c.id, "merge", mergeText).then(() => toast({ title: "Merged & synced" })); }}
+        <Button size="sm" variant="outline" disabled={!!busy} onClick={() => { if (!showMerge) { setMergeText(c.local.text); setShowMerge(true); } else onResolve(c.id, "merge", mergeText).then((ok) => ok && toast({ title: "Merged" })); }}
           className="gap-1 border-emerald-500/30 bg-emerald-500/5 font-mono text-[10px] text-emerald-300 hover:bg-emerald-500/10">
           <GitMerge className="h-3 w-3" /> {showMerge ? "Apply merge" : "Merge…"}
         </Button>

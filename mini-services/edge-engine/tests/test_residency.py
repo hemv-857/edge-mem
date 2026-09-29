@@ -53,7 +53,7 @@ class FakeShard:
 
     def optimize(self): pass
     def flush(self): pass
-    def manifest_hash(self): return str(sorted((k, v.get("updated_at")) for k, v in self.pts.items()))
+    def manifest_hash(self, fresh=False): return str(sorted((k, v.get("updated_at")) for k, v in self.pts.items()))
 
 
 engine.ShardStore = FakeShard

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { edge } from "@/lib/edge-api";
+import { toast } from "@/hooks/use-toast";
 import type {
   EdgeState, SyncStatus, MemoryStats, FleetOverview, ActivityEntry,
   SearchResponse, SearchMode, SearchFilters, Policy,
@@ -49,12 +50,14 @@ export interface EdgeHook {
   closePoint: () => void;
   // actions
   bootstrap: () => Promise<void>;
-  sync: () => Promise<void>;
+  /** resolves true when the sync ran; false when it could not (offline, cloud down) */
+  sync: () => Promise<boolean>;
   toggleConnectivity: () => Promise<void>;
   setOnline: (online: boolean) => Promise<void>;
   write: (p: Parameters<typeof edge.write>[0]) => Promise<void>;
   search: (q: string, shard: string, mode: SearchMode, limit?: number, opts?: SearchOpts) => Promise<SearchResponse>;
-  resolveConflict: (conflictId: string, resolution: "local" | "remote" | "merge", mergedText?: string) => Promise<void>;
+  /** resolves true when the conflict was resolved; false (with a toast) when the engine refused */
+  resolveConflict: (conflictId: string, resolution: "local" | "remote" | "merge", mergedText?: string) => Promise<boolean>;
   demoConflict: () => Promise<void>;
   refresh: () => Promise<void>;
   busy: string | null; // which action is running
@@ -148,8 +151,28 @@ export function useEdge(): EdgeHook {
   const openPoint = useCallback((p: PointRef) => setActivePoint(p), []);
   const closePoint = useCallback(() => setActivePoint(null), []);
 
-  const bootstrap = useCallback(() => run("bootstrap", () => edge.bootstrap(activeRef.current).then(() => undefined)), [run]);
-  const sync = useCallback(() => run("sync", () => edge.sync(activeRef.current).then(() => undefined)), [run]);
+  // The engine answers 200 {ok:false, reason} when it cannot reach the cloud;
+  // surface that here so no caller (button, palette, auto-sync) fails silently.
+  const bootstrap = useCallback(() => run("bootstrap", async () => {
+    const r = await edge.bootstrap(activeRef.current);
+    if (!r.ok) {
+      toast({ title: "Bootstrap failed", description: r.reason ?? "unknown error", variant: "destructive" });
+    } else {
+      toast({ title: "Bootstrapped", description: `Pulled ${r.pulled} point(s) from cloud`
+        + (r.conflicts ? ` · ${r.conflicts} conflict(s) need review` : "") });
+    }
+  }), [run]);
+  const sync = useCallback(() => run("sync", async () => {
+    const r = await edge.sync(activeRef.current);
+    if (r.ok === false) {
+      toast({ title: r.reason === "offline" ? "Offline" : "Sync failed",
+        description: r.reason === "offline" ? "Queue kept — sync runs once the link is back" : (r.reason ?? "unknown error"),
+        variant: r.reason === "offline" ? "default" : "destructive" });
+    } else if (r.new_conflicts) {
+      toast({ title: "Conflicts found", description: `${r.new_conflicts} note(s) diverged — review them in Sync` });
+    }
+    return r.ok !== false;
+  }), [run]);
   const setOnline = useCallback((online: boolean) => run("connectivity", () => edge.connectivity(activeRef.current, online).then(() => undefined)), [run]);
   const toggleConnectivity = useCallback(() => {
     const next = !(syncStatus?.online ?? true);
@@ -162,7 +185,16 @@ export function useEdge(): EdgeHook {
       filters: opts?.filters, explain: opts?.explain,
     })), [run]);
   const resolveConflict = useCallback((conflictId: string, resolution: "local" | "remote" | "merge", mergedText?: string) =>
-    run("resolve", () => edge.resolveConflict(activeRef.current, conflictId, resolution, mergedText).then(() => undefined)), [run]);
+    run("resolve", async () => {
+      try {
+        await edge.resolveConflict(activeRef.current, conflictId, resolution, mergedText);
+        return true;
+      } catch (e) {
+        // e.g. cloud down or device offline: the card stays open, nothing was lost
+        toast({ title: "Could not resolve", description: e instanceof Error ? e.message.slice(0, 160) : String(e), variant: "destructive" });
+        return false;
+      }
+    }), [run]);
   const demoConflict = useCallback(() => run("demo", () => edge.demoConflict(activeRef.current).then(() => undefined)), [run]);
   const refresh = useCallback(() => run("refresh", async () => { await refreshSnapshot(); }), [run, refreshSnapshot]);
 

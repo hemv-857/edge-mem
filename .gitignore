@@ -65,3 +65,8 @@ mini-services/edge-engine/data-beta/
 # pinned embedding model cache (embed.py) — downloaded, not committed
 mini-services/edge-engine/data/models/
 !.env.example
+# admin policy persisted by the engine + torn-write temp files
+mini-services/edge-engine/data/policy.json
+mini-services/edge-engine/data-beta/
+*.json.tmp
+.zscripts/dev.pid

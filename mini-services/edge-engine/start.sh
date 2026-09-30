@@ -98,6 +98,17 @@ else
 	fi
 fi
 
+# Render buildCommand runs this with EDGE_WARMUP=1: the qdrant binary (above)
+# and the embedding models are cached during the build, whose disk survives into
+# runtime — so boot never races the health-check window on a cold, ephemeral
+# disk. No servers are started here.
+if [ "${EDGE_WARMUP:-0}" = "1" ]; then
+	echo "[edge-engine] warmup: caching embedding models..."
+	PYTHONPATH=src "$PY" -c 'import embed; embed.get_dense(); embed.get_bm25()'
+	echo "[edge-engine] warmup complete"
+	exit 0
+fi
+
 # --- federated peer: a second real device on its own port + data dir -------
 # device-alpha is this process; device-beta is a genuinely separate engine
 # holding its own memory, reaching the same Qdrant Server. The fleet panel

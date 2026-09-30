@@ -9,11 +9,13 @@ services:
   - type: web
     name: edge-mem-engine
     runtime: python
-    plan: starter # fastembed's model load needs more RAM than free tier
-    buildCommand: pip install -r mini-services/edge-engine/requirements.txt
+    plan: free # engine + peer + qdrant measure ~95MB, fits 512MB
+    repo: https://github.com/hemv-857/edge-mem
+    branch: main
+    # EDGE_WARMUP caches qdrant + models at build time (disk persists to runtime)
+    buildCommand: pip install -r mini-services/edge-engine/requirements.txt && EDGE_WARMUP=1 bash mini-services/edge-engine/start.sh
     startCommand: bash mini-services/edge-engine/start.sh
     healthCheckPath: /api/edge/health
-    healthCheckTimeout: 300 # first boot downloads the embedding model
     envVars:
       - key: PYTHON_VERSION
         value: "3.13"

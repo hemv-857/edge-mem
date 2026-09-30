@@ -9,10 +9,11 @@ A device keeps working with no network. The cloud adds shared retrieval and
 LLM-assisted synthesis (tagging and SOP distillation), but nothing on the device
 depends on it.
 
-## Pitch deck and business model
+## Demo, pitch deck and business model
 
-The [EDGE.MEM pitch deck](https://drive.google.com/file/d/19Dq-LhxoTzhdAWAs9wkoQ8rvZzI6v5tJ/view?usp=sharing)
-(PDF, Google Drive) presents the product and the business case.
+- [Demo video](https://drive.google.com/file/d/1jMHn4Do94CLMi2uxqPao-_Qm_owcWabR/view?usp=sharing) (MP4, Google Drive)
+- [Pitch deck](https://drive.google.com/file/d/19Dq-LhxoTzhdAWAs9wkoQ8rvZzI6v5tJ/view?usp=sharing) (PDF, Google Drive)
+- [All submission files](https://drive.google.com/drive/folders/1I1GbZSiF2JqdgyWjbx2ADoYsJBNrOhVD?usp=sharing): video, deck and both workbooks in one Drive folder
 
 The pricing and go-to-market analysis lives in two workbooks. Copies are in
 `docs/`, and shared versions are on Google Sheets:

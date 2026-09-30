@@ -2,23 +2,22 @@
 
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { Search, Zap, Wifi, WifiOff, Sparkles, Quote, Cloud, Save, Loader2, GitCompare, Copy, Clock, ListFilter, X } from "lucide-react";
+import { Database, Layers, Loader2, Save, Search, Timer, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import { edge as edgeApi } from "@/lib/edge-api";
 import type { EdgeHook } from "@/hooks/use-edge";
 import type { SearchMode, SearchResponse, SearchFilterKey, SearchFilters, SearchResult } from "@/lib/edge-types";
-import { Panel, LatencyBadge, CriticalityBadge, formatRelative } from "./edge-ui";
+import { BigStat, BigStats, Hl, Panel, PageHero, CriticalityBadge, Segmented, Tag, formatRelative } from "./edge-ui";
 
-const SHARDS = ["manuals", "incidents", "sensors"] as const;
-const MODES: { id: SearchMode; label: string; desc: string }[] = [
-  { id: "hybrid", label: "Hybrid", desc: "Dense + BM25, RRF fusion" },
-  { id: "dense", label: "Dense", desc: "FastEmbed semantic" },
-  { id: "sparse", label: "Sparse", desc: "BM25 keyword" },
-];
+const SHARDS = ["incidents", "manuals", "sensors"] as const;
+const MODES = ["hybrid", "dense", "sparse"] as const;
+const MODE_HINT: Record<SearchMode, string> = {
+  hybrid: "Dense + BM25, fused with RRF",
+  dense: "FastEmbed semantic similarity",
+  sparse: "BM25 keyword match",
+};
 
 // payload filters pushed down into the Qdrant filter (AND-combined server-side)
 const FILTER_DEFS: { key: SearchFilterKey; label: string; options: string[] }[] = [
@@ -33,30 +32,38 @@ const RESTRICTED_TIP = "Restricted notes never leave the device — cloud LLM di
 
 const NO_FILTERS: SearchFilters = { domain: "", criticality: "", sensitivity: "", origin_device: "" };
 
-const EXAMPLES = [
+export const EXAMPLES = [
   { q: "vibration outer race bearing defect", shard: "incidents" },
   { q: "bearing replacement procedure torque clearance", shard: "manuals" },
-  { q: "motor rebalance ISO G2.5", shard: "manuals" },
   { q: "overheating dust filter kiosk", shard: "incidents" },
   { q: "seal leak gland repacking", shard: "incidents" },
-];
+] as const;
 
-export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
-  const [query, setQuery] = useState("");
-  const [shard, setShard] = useState<string>("incidents");
+type Shard = (typeof SHARDS)[number];
+type Recent = { q: string; shard: string; mode: SearchMode; ts: number };
+
+export default function SearchPlayground({
+  edge, initialQuery, initialResult,
+}: {
+  edge: EdgeHook;
+  initialQuery?: string;
+  initialResult?: SearchResponse;
+}) {
+  const [query, setQuery] = useState(initialQuery ?? "");
+  const [shard, setShard] = useState<Shard>((initialResult?.shard as Shard) ?? "incidents");
   const [mode, setMode] = useState<SearchMode>("hybrid");
   const [limit, setLimit] = useState(5);
-  const [res, setRes] = useState<SearchResponse | null>(null);
+  const [res, setRes] = useState<SearchResponse | null>(initialResult ?? null);
   const [running, setRunning] = useState(false);
   const [distillId, setDistillId] = useState<string | null>(null);
   const [distilled, setDistilled] = useState<Record<string, { sop: string; saving: boolean; sensitivity: string }>>({});
   const [compare, setCompare] = useState<Record<string, SearchResponse> | null>(null);
   const [comparing, setComparing] = useState(false);
-  const [recent, setRecent] = useState<{ q: string; shard: string; mode: SearchMode; ts: number }[]>([]);
+  const [recent, setRecent] = useState<Recent[]>([]);
   const [filters, setFilters] = useState<SearchFilters>(NO_FILTERS);
   const online = edge.syncStatus?.online ?? true;
+  const anyFilter = Object.values(filters).some(Boolean);
 
-  // load recent searches from localStorage on mount
   useEffect(() => {
     try {
       const raw = localStorage.getItem("edge-recent-searches");
@@ -64,19 +71,12 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
     } catch { /* ignore */ }
   }, []);
 
-  function addRecent(q: string) {
+  function addRecent(q: string, s: string) {
     setRecent((prev) => {
-      const next = [{ q, shard, mode, ts: Date.now() }, ...prev.filter((r) => r.q !== q)].slice(0, 5);
+      const next = [{ q, shard: s, mode, ts: Date.now() }, ...prev.filter((r) => r.q !== q)].slice(0, 5);
       try { localStorage.setItem("edge-recent-searches", JSON.stringify(next)); } catch { /* ignore */ }
       return next;
     });
-  }
-
-  function copyToClipboard(text: string, label: string) {
-    navigator.clipboard?.writeText(text).then(
-      () => toast({ title: "Copied", description: label }),
-      () => toast({ title: "Copy failed", variant: "destructive" }),
-    );
   }
 
   function activeFilters(f: SearchFilters): SearchFilters {
@@ -85,20 +85,15 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
     return out;
   }
 
-  async function run(q?: string) {
+  async function run(q?: string, s: Shard = shard) {
     const text = (q ?? query).trim();
-    if (!text) {
-      toast({ title: "Enter a query", description: "Type a search query first.", variant: "destructive" });
-      return;
-    }
+    if (!text) return;
     if (q) setQuery(q);
     setRunning(true);
     setCompare(null);
     try {
-      const active = activeFilters(filters);
-      const r = await edge.search(text, shard, mode, limit, { filters: active, explain: true });
-      setRes(r);
-      addRecent(text);
+      setRes(await edge.search(text, s, mode, limit, { filters: activeFilters(filters), explain: true }));
+      addRecent(text, s);
     } catch (e) {
       toast({ title: "Search failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
     } finally {
@@ -106,23 +101,16 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
     }
   }
 
-  // Compare modes: run dense/sparse/hybrid side-by-side to show RRF's value
+  // dense / sparse / hybrid side by side — shows what RRF fusion buys
   async function runCompare() {
     const text = query.trim();
-    if (!text) {
-      toast({ title: "Enter a query", description: "Type a search query first.", variant: "destructive" });
-      return;
-    }
+    if (!text) return;
     setComparing(true);
     setCompare(null);
     try {
-      const modes: SearchMode[] = ["dense", "sparse", "hybrid"];
       const results = await Promise.all(
-        modes.map(async (m) => {
-          try {
-            const r = await edge.search(text, shard, m, limit);
-            return [m, r] as const;
-          } catch { return [m, null] as const; }
+        MODES.map(async (m) => {
+          try { return [m, await edge.search(text, shard, m, limit)] as const; } catch { return [m, null] as const; }
         })
       );
       const map: Record<string, SearchResponse> = {};
@@ -133,8 +121,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
     }
   }
 
-  // Cloud LLM: distill a retrieved incident into a reusable SOP update.
-  // Only callable when online — reinforces the edge/cloud division of labor.
+  // Cloud LLM: distill a retrieved incident into a reusable SOP. Online only.
   async function distill(r0: SearchResult, shardName: string) {
     const { id, text, asset_id } = r0;
     if (!online) {
@@ -154,7 +141,6 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
       const data = await r.json();
       if (!r.ok || !data.ok) throw new Error(data.error || "LLM failed");
       setDistilled((p) => ({ ...p, [id]: { sop: data.sop, saving: false, sensitivity } }));
-      toast({ title: "SOP distilled by cloud LLM", description: "Review and save to the manuals shard." });
     } catch (e) {
       toast({ title: "Distill failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
     } finally {
@@ -167,7 +153,7 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
     try {
       // derived SOP inherits the source note's sensitivity (policy decides whether it syncs)
       await edge.write({ shard: "manuals", text: sop, criticality: "high", sensitivity, asset_id, title: `SOP distilled from incident`, domain: "manual" });
-      toast({ title: "SOP saved to manuals", description: "Queued for fleet sync — will flow to all devices." });
+      toast({ title: "SOP saved to manuals", description: "It syncs to the fleet with the next sync." });
       setDistilled((p) => {
         const n = { ...p };
         delete n[id];
@@ -179,357 +165,221 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
     }
   }
 
+  const selectCls = "h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground";
+
+  const n = res?.results.length ?? 0;
+  const top = (k: ScoreKey) => Math.max(1e-9, ...(res?.results ?? []).map((r) => (r.scores ? r.scores[k] ?? 0 : k === "fused" ? r.score : 0)));
+  const scoreMax = { fused: top("fused"), dense: top("dense"), sparse: top("sparse") };
+  const shardPoints = edge.memory?.shards[shard]?.points;
+
   return (
-    <div className="space-y-5">
-      <Panel
-        title="Search Playground"
-        desc="On-device hybrid retrieval — dense (FastEmbed) + sparse (BM25) fused via RRF. Runs with the network fully off."
-        right={
-          <div className="flex items-center gap-2">
-            <div className={cn("flex items-center gap-1.5 rounded-md border px-2 py-1", online ? "border-emerald-500/30 bg-emerald-500/5" : "border-amber-500/30 bg-amber-500/5")}>
-              {online ? <Wifi className="h-3 w-3 text-emerald-400" /> : <WifiOff className="h-3 w-3 text-amber-400" />}
-              <span className={cn("font-mono text-[10px] uppercase tracking-wider", online ? "text-emerald-300" : "text-amber-300")}>{online ? "online" : "offline"}</span>
-            </div>
-          </div>
+    <div className="grid gap-6 xl:grid-cols-12">
+      <PageHero
+        className="xl:col-span-12"
+        tone={res && n === 0 ? "warn" : "ok"}
+        title={res ? <><Hl>{n} {n === 1 ? "match" : "matches"}</Hl> in {res.shard}.</> : <>Ask this device&apos;s <Hl>memory.</Hl></>}
+        sub={res
+          ? <>Ranked {res.mode === "hybrid" ? "by dense + sparse fusion" : `by ${res.mode} vectors`}, on this device{res.offline ? " with no link" : ""}.</>
+          : "Hybrid search runs here on the device — with or without a link."}
+        stats={
+          <BigStats>
+            <BigStat icon={<Database />} label="On device" value={edge.memory?.total_points ?? "—"} hint="points searchable" />
+            <BigStat icon={<Layers />} label={`In ${shard}`} value={shardPoints ?? "—"} hint="points in this shard" />
+            <BigStat icon={<Timer />} label="Last search" value={res ? `${res.latency_ms.toFixed(res.latency_ms < 10 ? 1 : 0)}ms` : "—"} tone={res ? (res.latency_ms > 200 ? "crit" : res.latency_ms > 60 ? "warn" : "ok") : undefined} hint={res ? (res.offline ? "offline" : "on-device") : "no search yet"} />
+          </BigStats>
         }
-      >
-        {/* query row — textarea + search button aligned to same height */}
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-          <div className="flex-1">
-            <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Query</Label>
-            <Textarea
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="e.g. seen this vibration pattern before?"
-              className="mt-1 min-h-[42px] resize-none border-border bg-card/40 font-mono text-sm leading-tight"
-              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) run(); }}
-            />
-          </div>
-          <div className="mt-[18px] flex h-[42px] gap-2">
-            <Button
-              onClick={() => run()}
-              disabled={running || !!edge.busy}
-              className="h-[42px] gap-2 bg-emerald-500/90 text-emerald-950 hover:bg-emerald-400 sm:w-28"
-            >
-              <Search className={cn("h-4 w-4", running && "animate-pulse")} />
-              {running ? "…" : "Search"}
-            </Button>
-            <Button
-              onClick={() => runCompare()}
-              disabled={comparing || !!edge.busy || !query.trim()}
-              variant="outline"
-              title="Run dense/sparse/hybrid side-by-side to compare retrieval modes"
-              className="h-[42px] gap-1.5 border-border bg-card/40 font-mono text-xs hover:bg-card/60"
-            >
-              <GitCompare className={cn("h-3.5 w-3.5", comparing && "animate-spin")} />
-              {comparing ? "…" : "Compare"}
-            </Button>
-          </div>
-        </div>
+        footer={
+          <div className="space-y-4">
+            <form onSubmit={(e) => { e.preventDefault(); void run(); }} className="space-y-3">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <div className="relative flex-1">
+                  <Search aria-hidden className="pointer-events-none absolute top-1/2 left-4 h-[18px] w-[18px] -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="e.g. seen this vibration pattern before?"
+                    aria-label="Search query"
+                    className="h-12 bg-background pl-11 text-base md:text-base"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button type="submit" disabled={running || !!edge.busy} className="h-12 flex-1 gap-2 bg-emerald-500 px-7 text-base font-semibold text-emerald-950 shadow-[inset_0_1px_0_rgb(255_255_255/0.25)] hover:bg-emerald-400 sm:flex-none">
+                    {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                    Search
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => runCompare()}
+                    disabled={comparing || !!edge.busy || !query.trim()}
+                    title="Run dense, sparse and hybrid side by side"
+                    className="h-12"
+                  >
+                    {comparing && <Loader2 className="h-4 w-4 animate-spin" />}
+                    Compare modes
+                  </Button>
+                </div>
+              </div>
 
-        {/* controls — Shard / Mode / Limit in a unified flex row */}
-        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-12">
-          <div className="sm:col-span-5">
-            <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Shard</Label>
-            <div className="mt-1 grid grid-cols-3 gap-1">
-              {SHARDS.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setShard(s)}
-                  className={cn(
-                    "rounded-md border px-1 py-1.5 font-mono text-[11px] capitalize transition-colors",
-                    shard === s ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-border bg-card/40 text-muted-foreground hover:text-foreground"
-                  )}
-                >{s}</button>
-              ))}
-            </div>
-          </div>
-          <div className="sm:col-span-4">
-            <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Mode</Label>
-            <div className="mt-1 flex gap-1">
-              {MODES.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => setMode(m.id)}
-                  title={m.desc}
-                  className={cn(
-                    "flex-1 rounded-md border px-2 py-1.5 font-mono text-[11px] transition-colors",
-                    mode === m.id ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-border bg-card/40 text-muted-foreground hover:text-foreground"
-                  )}
-                >{m.label}</button>
-              ))}
-            </div>
-          </div>
-          <div className="sm:col-span-3">
-            <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Limit: {limit}</Label>
-            <input
-              type="range" min={1} max={10} value={limit}
-              onChange={(e) => setLimit(Number(e.target.value))}
-              aria-label="Maximum results"
-              className="mt-2 w-full accent-emerald-500"
-            />
-          </div>
-        </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Segmented label="Shard" value={shard} options={SHARDS} onChange={setShard} />
+                <Segmented label="Retrieval mode" value={mode} options={MODES} onChange={setMode}
+                  render={(m) => <span title={MODE_HINT[m]} className="capitalize">{m}</span>} />
+                <select value={limit} onChange={(e) => setLimit(Number(e.target.value))} aria-label="Maximum results" className={selectCls}>
+                  {[3, 5, 10].map((n) => <option key={n} value={n}>Top {n}</option>)}
+                </select>
+                <span aria-hidden className="mx-1 hidden h-5 w-px bg-border sm:block" />
+                {FILTER_DEFS.map((f) => {
+                  const opts = f.key === "origin_device" ? (edge.state?.devices ?? []).map((d) => d.id) : f.options;
+                  return (
+                    <select
+                      key={f.key}
+                      value={filters[f.key] ?? ""}
+                      onChange={(e) => setFilters((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                      aria-label={`${f.label} filter`}
+                      className={cn(selectCls, filters[f.key] && "border-emerald-500/50")}
+                    >
+                      <option value="">Any {f.label.toLowerCase()}</option>
+                      {opts.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  );
+                })}
+                {anyFilter && (
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setFilters(NO_FILTERS)} className="h-8 gap-1 text-muted-foreground">
+                    <X className="h-3.5 w-3.5" /> Clear filters
+                  </Button>
+                )}
+              </div>
+            </form>
 
-        {/* filters — AND-combined payload constraints evaluated by Qdrant */}
-        <div className="mt-3">
-          <div className="mb-1.5 flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-              <ListFilter className="h-3 w-3" /> Filters
-            </div>
-            {Object.values(filters).some(Boolean) && (
-              <button
-                onClick={() => setFilters(NO_FILTERS)}
-                className="flex items-center gap-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground/60 hover:text-foreground"
-              >
-                <X className="h-2.5 w-2.5" /> clear all
-              </button>
+            {!res && (
+              <div className="space-y-4 text-sm">
+                <ChipRow label="Try">
+                  {EXAMPLES.map((ex) => (
+                    <Chip key={ex.q} onClick={() => { setShard(ex.shard); void run(ex.q, ex.shard); }}>{ex.q}</Chip>
+                  ))}
+                </ChipRow>
+                {recent.length > 0 && (
+                  <ChipRow
+                    label="Recent"
+                    after={<button type="button" onClick={() => { setRecent([]); try { localStorage.removeItem("edge-recent-searches"); } catch { /* ignore */ } }} className="text-xs text-muted-foreground hover:text-foreground">Clear</button>}
+                  >
+                    {recent.map((r) => (
+                      <Chip key={r.q + r.ts} title={`${r.shard} · ${r.mode}`} onClick={() => { setShard(r.shard as Shard); setMode(r.mode); void run(r.q, r.shard as Shard); }}>{r.q}</Chip>
+                    ))}
+                  </ChipRow>
+                )}
+              </div>
             )}
           </div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {FILTER_DEFS.map((f) => {
-              const opts = f.key === "origin_device"
-                ? (edge.state?.devices ?? []).map((d) => d.id)
-                : f.options;
-              return (
-                <div key={f.key}>
-                  <Label className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">{f.label}</Label>
-                  <select
-                    value={filters[f.key] ?? ""}
-                    onChange={(e) => setFilters((prev) => ({ ...prev, [f.key]: e.target.value }))}
-                    aria-label={`${f.label} filter`}
-                    className="mt-1 w-full rounded-md border border-border bg-card/40 px-2 py-1.5 font-mono text-[11px] text-foreground focus:border-emerald-500/40 focus:outline-none"
-                  >
-                    <option value="">any</option>
-                    {opts.map((o) => <option key={o} value={o}>{o}</option>)}
-                  </select>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        }
+      />
 
-        {/* examples */}
-        <div className="mt-4">
-          <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-            <Sparkles className="h-3 w-3" /> Example queries
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {EXAMPLES.map((ex) => (
-              <button
-                key={ex.q}
-                onClick={() => { setShard(ex.shard); run(ex.q); }}
-                className="rounded-full border border-border bg-card/40 px-2.5 py-1 text-left font-mono text-[10px] text-muted-foreground transition-colors hover:border-emerald-500/30 hover:text-emerald-300"
-              >
-                <span className="text-emerald-400/70">{ex.shard}/</span>{ex.q}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* recent searches (persisted in localStorage) */}
-        {recent.length > 0 && (
-          <div className="mt-3">
-            <div className="mb-1.5 flex items-center justify-between">
-              <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-                <Clock className="h-3 w-3" /> Recent searches
-              </div>
-              <button
-                onClick={() => { setRecent([]); try { localStorage.removeItem("edge-recent-searches"); } catch { /* ignore */ } }}
-                className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground/60 hover:text-foreground"
-              >clear</button>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {recent.map((r) => (
-                <button
-                  key={r.q + r.ts}
-                  onClick={() => { setShard(r.shard); setMode(r.mode); setQuery(r.q); run(r.q); }}
-                  className="flex items-center gap-1 rounded-full border border-sky-500/20 bg-sky-500/5 px-2.5 py-1 text-left font-mono text-[10px] text-muted-foreground transition-colors hover:border-sky-500/40 hover:text-sky-300"
-                  title={`${r.shard} · ${r.mode}`}
-                >
-                  <span className="text-sky-400/60">{r.shard.slice(0, 3)}/</span>{r.q.length > 30 ? r.q.slice(0, 30) + "…" : r.q}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* copy query action */}
-        {query.trim() && (
-          <div className="mt-3 flex items-center justify-end">
-            <button
-              onClick={() => copyToClipboard(query, "query copied to clipboard")}
-              className="flex items-center gap-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground/60 transition-colors hover:text-foreground"
-            >
-              <Copy className="h-3 w-3" /> copy query
-            </button>
-          </div>
-        )}
-      </Panel>
-
-      {/* results */}
       {res && (
         <Panel
+          className="xl:col-span-12"
           title="Results"
-          desc={`Retrieved from ${res.shard} · ${res.mode} mode`}
-          right={
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-[10px] text-muted-foreground">{res.results.length} hits</span>
-              <LatencyBadge ms={res.latency_ms} offline={res.offline} />
-            </div>
-          }
+          desc="best first · bars scaled to the top hit"
+          flush
         >
-          {res.offline && (
-            <div className="mb-3 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-300">
-              <WifiOff className="h-3.5 w-3.5" />
-              <span className="font-mono">OFFLINE — retrieved entirely from local EdgeShard memory, zero network calls</span>
-            </div>
-          )}
           {res.results.length === 0 ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">No matches. Try a different query or shard.</div>
+            <p className="px-4 py-10 sm:px-5 text-center text-sm text-muted-foreground">No matches. Try other words, another shard, or fewer filters.</p>
           ) : (
-            <div className="space-y-2.5 edge-stagger">
+            <ol className="grid gap-px overflow-hidden md:grid-cols-2">
               {res.results.map((r, i) => {
-                const maxScore = res.results[0]?.score ?? 1;
-                const pct = Math.max(4, Math.round((r.score / (maxScore || 1)) * 100));
                 const restricted = isRestricted(r.sensitivity ?? res.filters?.sensitivity);
+                const sop = distilled[r.id];
                 return (
-                  <div
-                    key={r.id}
-                    onClick={() => edge.openPoint({ ...r, shard: res.shard })}
-                    className="group cursor-pointer rounded-lg border border-border bg-card/40 p-3.5 transition-colors hover:border-emerald-500/30 hover:bg-card/60"
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border bg-muted font-mono text-[10px] text-muted-foreground">{i + 1}</div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-mono text-xs font-semibold text-foreground">{r.slug ?? r.id.slice(0, 8)}</span>
-                          {r.asset_id && <span className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{r.asset_id}</span>}
-                          {r.origin_device && <span className="font-mono text-[9px] text-sky-300">@{r.origin_device}</span>}
-                          <CriticalityBadge value={r.criticality} />
-                        </div>
-                        <div className="mt-1.5 flex items-start gap-1.5">
-                          <Quote className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/60" />
-                          <p className="text-sm leading-relaxed break-words text-foreground/90">{r.text}</p>
-                        </div>
-                        <div className="mt-2 flex items-center gap-3">
-                          <div className="flex flex-1 items-center gap-2">
-                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                              <div className={cn("h-full rounded-full", i === 0 ? "bg-emerald-400" : "bg-emerald-400/60")} style={{ width: `${pct}%` }} />
-                            </div>
-                            <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{r.score.toFixed(4)}</span>
-                          </div>
-                          {r.updated_at && <span className="font-mono text-[10px] text-muted-foreground">{formatRelative(r.updated_at)}</span>}
+                  <li key={r.id} className="group relative flex bg-card px-4 py-4 sm:px-5 md:last:odd:col-span-2 shadow-[0_0_0_1px_var(--color-border)] transition-colors hover:bg-muted/30">
+                    <div className="flex min-w-0 flex-1 items-start gap-3">
+                      <span className="w-4 shrink-0 pt-0.5 text-right font-mono text-xs text-muted-foreground">{i + 1}</span>
+                      <div className="flex h-full min-w-0 flex-1 flex-col">
+                        <div className="flex items-start gap-2">
                           <button
-                            onClick={(e) => { e.stopPropagation(); distill(r, res.shard); }}
-                            disabled={!online || restricted || distillId === r.id}
-                            title={restricted ? RESTRICTED_TIP : online ? "Distill this incident into an SOP via the cloud LLM" : "Cloud LLM requires connectivity"}
-                            className={cn(
-                              "flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider transition-colors disabled:opacity-40",
-                              restricted ? "border-rose-500/30 text-rose-300" : online ? "border-sky-500/30 bg-sky-500/5 text-sky-300 hover:bg-sky-500/10" : "border-border text-muted-foreground"
-                            )}
+                            type="button"
+                            onClick={() => edge.openPoint({ ...r, shard: res.shard })}
+                            className="min-w-0 text-left text-[15px] font-semibold tracking-tight text-foreground underline-offset-4 after:absolute after:inset-0 hover:underline"
                           >
-                            {distillId === r.id ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Cloud className="h-2.5 w-2.5" />}
-                            Distill → SOP
+                            {r.title || r.slug || r.id.slice(0, 8)}
+                          </button>
+                          <CriticalityBadge value={r.criticality} />
+                          {r.updated_at && <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">{formatRelative(r.updated_at)}</span>}
+                        </div>
+                        <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
+                          {[r.title ? r.slug : null, r.asset_id, r.origin_device && `@${r.origin_device}`].filter(Boolean).join(" · ")}
+                        </p>
+                        <p className="mt-1.5 text-sm leading-relaxed break-words text-foreground/90">{r.text}</p>
+                        <ScoreBars r={r} max={scoreMax} />
+                        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1">
+                          <button
+                            type="button"
+                            onClick={() => distill(r, res.shard)}
+                            disabled={!online || restricted || distillId === r.id}
+                            title={restricted ? RESTRICTED_TIP : online ? "Distill this incident into an SOP with the cloud LLM" : "Cloud LLM requires connectivity"}
+                            className="relative z-10 ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+                          >
+                            {distillId === r.id && <Loader2 className="h-3 w-3 animate-spin" />}
+                            {restricted ? "Restricted · stays on device" : "Distill → SOP"}
                           </button>
                         </div>
-                        {r.scores && (
-                          <div className="mt-2 rounded border border-border/60 bg-background/40 px-2 py-1.5" data-testid="score-breakdown">
-                            <ScoreBreakdown rows={res.results} current={r} />
-                          </div>
-                        )}
-                        {distilled[r.id] && (
-                          <div className="mt-2 rounded-md border border-sky-500/25 bg-sky-500/5 p-2.5">
-                            <div className="mb-1 flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-wider text-sky-300">
-                              <Cloud className="h-2.5 w-2.5" /> Cloud LLM — distilled SOP
-                            </div>
-                            <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-foreground/90">{distilled[r.id].sop}</pre>
-                            <div className="mt-2 flex items-center gap-1.5">
-                              <Button
-                                size="sm"
-                                onClick={(e) => { e.stopPropagation(); saveSop(r.id, distilled[r.id].sop, distilled[r.id].sensitivity, r.asset_id); }}
-                                disabled={distilled[r.id].saving || !!edge.busy}
-                                className="gap-1 bg-emerald-500/90 font-mono text-[10px] text-emerald-950 hover:bg-emerald-400"
-                              >
-                                {distilled[r.id].saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                                Save to manuals shard
-                              </Button>
-                              <span className="font-mono text-[9px] text-muted-foreground">→ queues for fleet sync</span>
-                            </div>
+                        {sop && (
+                          <div className="relative z-10 mt-3 rounded-md border border-border bg-background p-3">
+                            <div className="mb-2 text-xs text-muted-foreground">Draft SOP from the cloud LLM</div>
+                            <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground/90">{sop.sop}</pre>
+                            <Button
+                              size="sm"
+                              onClick={() => saveSop(r.id, sop.sop, sop.sensitivity, r.asset_id)}
+                              disabled={sop.saving || !!edge.busy}
+                              className="mt-3 gap-1.5 bg-emerald-500 text-emerald-950 shadow-[inset_0_1px_0_rgb(255_255_255/0.25)] hover:bg-emerald-400"
+                            >
+                              {sop.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                              Save to manuals
+                            </Button>
                           </div>
                         )}
                       </div>
                     </div>
-                  </div>
+                  </li>
                 );
               })}
-            </div>
+            </ol>
           )}
-          <div className="mt-3 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
-            <Zap className="h-3 w-3 text-emerald-400" />
-            <span>score: {res.mode === "hybrid" ? "RRF (k=2) of dense + sparse prefetches" : res.mode === "dense" ? "cosine similarity, FastEmbed bge-small-en" : "BM25 term-frequency"}</span>
-          </div>
         </Panel>
       )}
 
-      {/* compare-modes panel — shows dense vs sparse vs hybrid side-by-side */}
       {compare && (
         <Panel
-          title="Mode Comparison"
-          desc={`dense vs sparse vs hybrid on ${shard} — shows why RRF fusion matters`}
-          right={
-            <button
-              onClick={() => setCompare(null)}
-              className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground"
-            >dismiss</button>
-          }
+          className="xl:col-span-12"
+          title="Mode comparison"
+          desc={`top 3 in ${shard}`}
+          right={<Button variant="ghost" size="sm" onClick={() => setCompare(null)} className="text-muted-foreground">Close</Button>}
         >
-          <div className="grid gap-3 sm:grid-cols-3">
-            {(["dense", "sparse", "hybrid"] as const).map((m) => {
+          <div className="grid gap-4 sm:grid-cols-3">
+            {MODES.map((m) => {
               const r = compare[m];
-              if (!r) return (
-                <div key={m} className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
-                  {m} failed
-                </div>
-              );
               return (
-                <div key={m} className={cn(
-                  "rounded-lg border p-3",
-                  m === "hybrid" ? "border-emerald-500/30 bg-emerald-500/[0.04]" : "border-border bg-card/40"
-                )}>
+                <div key={m}>
                   <div className="mb-2 flex items-center justify-between">
-                    <span className={cn(
-                      "rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider",
-                      m === "hybrid" ? "bg-emerald-500/15 text-emerald-300" : "bg-muted text-muted-foreground"
-                    )}>{m}{m === "hybrid" && " · RRF"}</span>
-                    <LatencyBadge ms={r.latency_ms} offline={r.offline} />
+                    <span className={cn("text-sm capitalize", m === "hybrid" ? "text-emerald-300" : "text-foreground")}>{m}</span>
+                    {r && <span className="font-mono text-xs text-muted-foreground">{r.latency_ms.toFixed(1)} ms</span>}
                   </div>
-                  <div className="space-y-1.5">
-                    {r.results.slice(0, 3).map((hit, i) => {
-                      const maxScore = r.results[0]?.score ?? 1;
-                      const pct = Math.max(4, Math.round((hit.score / (maxScore || 1)) * 100));
-                      return (
-                        <div key={hit.id} className="rounded border border-border/60 bg-background/40 p-1.5">
-                          <div className="flex items-center justify-between gap-1.5">
-                            <span className="truncate font-mono text-[10px] font-semibold text-foreground">{hit.slug ?? hit.id.slice(0, 8)}</span>
-                            <span className="shrink-0 font-mono text-[9px] tabular-nums text-emerald-400">{hit.score.toFixed(3)}</span>
-                          </div>
-                          <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted">
-                            <div className={cn("h-full rounded-full", i === 0 ? "bg-emerald-400" : "bg-emerald-400/50")} style={{ width: `${pct}%` }} />
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {r.results.length === 0 && <div className="py-2 text-center text-[10px] text-muted-foreground">no hits</div>}
-                  </div>
-                  <div className="mt-2 font-mono text-[9px] text-muted-foreground">{r.results.length} hits · {r.latency_ms.toFixed(1)}ms</div>
+                  {!r ? (
+                    <p className="text-xs text-rose-300">Failed</p>
+                  ) : r.results.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No hits</p>
+                  ) : (
+                    <ol className="space-y-1.5">
+                      {r.results.slice(0, 3).map((hit) => (
+                        <li key={hit.id} className="flex items-center justify-between gap-2 font-mono text-xs">
+                          <span className="truncate text-foreground/90">{hit.slug ?? hit.id.slice(0, 8)}</span>
+                          <span className="shrink-0 tabular-nums text-muted-foreground">{hit.score.toFixed(3)}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
                 </div>
               );
             })}
-          </div>
-          <div className="mt-3 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
-            <GitCompare className="h-3 w-3 text-emerald-400" />
-            <span>hybrid (RRF) fuses dense + sparse — surfaces both semantic and keyword matches, typically the most balanced ranking.</span>
           </div>
         </Panel>
       )}
@@ -537,35 +387,50 @@ export default function SearchPlayground({ edge }: { edge: EdgeHook }) {
   );
 }
 
-/** Per-channel contribution to the fused score. Each channel normalizes
- *  against its own max across the result set — dense (cosine) and sparse
- *  (BM25) live on different scales, so a shared axis would mislead. */
-function ScoreBreakdown({ rows, current }: { rows: SearchResult[]; current: SearchResult }) {
-  const s = current.scores;
-  if (!s) return null;
-  const maxOf = (k: "dense" | "sparse" | "fused") =>
-    Math.max(1e-9, ...rows.map((r) => r.scores?.[k] ?? 0));
-  const chans = [
-    { key: "dense" as const, label: "dense", value: s.dense, max: maxOf("dense"), bar: "bg-sky-400" },
-    { key: "sparse" as const, label: "sparse", value: s.sparse, max: maxOf("sparse"), bar: "bg-amber-400" },
-    { key: "fused" as const, label: "fused", value: s.fused, max: maxOf("fused"), bar: "bg-emerald-400" },
-  ];
+const BARS = [["fused", "bg-emerald-400"], ["dense", "bg-teal-300"], ["sparse", "bg-lime-300"]] as const;
+type ScoreKey = (typeof BARS)[number][0];
+
+/** Why a hit ranked where it did: fused score and its dense/sparse parts, each scaled to the best in this result set. */
+function ScoreBars({ r, max }: { r: SearchResult; max: Record<ScoreKey, number> }) {
+  const v: Record<ScoreKey, number | null> = r.scores
+    ? { fused: r.scores.fused, dense: r.scores.dense, sparse: r.scores.sparse }
+    : { fused: r.score, dense: null, sparse: null };
   return (
-    <div className="grid grid-cols-3 gap-2" aria-label="score breakdown">
-      {chans.map((c) => (
-        <div key={c.key}>
-          <div className="flex items-baseline justify-between font-mono text-[9px]">
-            <span className="uppercase tracking-wider text-muted-foreground">{c.label}</span>
-            <span className="tabular-nums text-foreground">{c.value === null ? "n/a" : c.value.toFixed(3)}</span>
-          </div>
-          <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted">
-            <div
-              className={cn("h-full rounded-full", c.bar)}
-              style={{ width: `${c.value === null ? 0 : Math.max(4, Math.round((c.value / c.max) * 100))}%` }}
-            />
-          </div>
+    <dl className="mt-auto grid gap-1 pt-3 font-mono text-xs" data-testid="score-breakdown" aria-label="score breakdown">
+      {BARS.filter(([k]) => k === "fused" || v[k] !== null).map(([k, c]) => (
+        <div key={k} className="grid grid-cols-[3.5rem_minmax(0,1fr)_3.5rem] items-center gap-2">
+          <dt className="text-muted-foreground">{r.scores ? k : "score"}</dt>
+          <dd className="h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden>
+            <div className={cn("h-full origin-left rounded-full transition-transform duration-500 ease-[var(--ease-out)]", c)} style={{ transform: `scaleX(${Math.max(0.02, (v[k] ?? 0) / max[k])})` }} />
+          </dd>
+          <dd className="text-right tabular-nums text-foreground/85">{fmt(v[k])}</dd>
         </div>
       ))}
+    </dl>
+  );
+}
+
+const fmt = (v: number | null) => (v === null ? "n/a" : v.toFixed(3));
+
+function ChipRow({ label, children, after }: { label: string; children: React.ReactNode; after?: React.ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="w-14 shrink-0 text-xs text-muted-foreground">{label}</span>
+      {children}
+      {after}
     </div>
+  );
+}
+
+function Chip({ children, onClick, title }: { children: React.ReactNode; onClick: () => void; title?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="h-7 max-w-full truncate rounded-md border border-border bg-background/40 px-2.5 text-xs text-foreground/75 transition-colors hover:border-emerald-500/40 hover:text-foreground"
+    >
+      {children}
+    </button>
   );
 }

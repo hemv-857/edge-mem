@@ -1,0 +1,28 @@
+# `vercel deploy` uploads the working directory as-is (unlike git-connected
+# deploys, which honour .gitignore). Without this the upload is 2.6GB of local
+# runtime artifacts and aborts.
+node_modules
+.next
+.venv
+.qdrant
+.claude
+*.log
+*.tsbuildinfo
+/verify-*.png
+mini-services
+tests
+docs
+db
+download
+agent-ctx
+tool-results
+qa-screens
+qa-screens2
+qa3
+qa4
+qa5
+qa6
+qa7
+qa8
+qa9
+qa10

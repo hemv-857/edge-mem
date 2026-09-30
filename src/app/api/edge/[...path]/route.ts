@@ -18,7 +18,9 @@ const TOKEN = process.env.EDGE_TOKEN;
 // loopback port. Operator-set, so not part of the SSRF surface.
 const REMOTE = (process.env.EDGE_URL ?? "").replace(/\/+$/, "");
 const MAX_BODY = 8 * 1024 * 1024; // same cap the engine enforces
-const TIMEOUT_MS = 10_000;
+// Remote engines sleep on free plans (Render cold start measured ~12s) — a
+// loopback engine answers in ms, a remote one sometimes needs a whole boot.
+const TIMEOUT_MS = REMOTE ? 30_000 : 10_000;
 
 async function proxy(req: Request, method: string, path: string[]) {
   const url = new URL(req.url);
@@ -67,7 +69,7 @@ async function proxy(req: Request, method: string, path: string[]) {
     });
   } catch (e) {
     console.error("[edge-proxy]", port, e);
-    return NextResponse.json({ error: `edge-engine unreachable on port ${port}` }, { status: 502 });
+    return NextResponse.json({ error: `edge-engine unreachable at ${new URL(target).host}` }, { status: 502 });
   }
 }
 

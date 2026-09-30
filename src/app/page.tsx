@@ -85,9 +85,13 @@ export default function Page() {
       <main className="mx-auto w-full max-w-[1760px] flex-1 px-4 py-6 sm:px-6 xl:px-10">
         {edge.error && !edge.state && (
           <div role="alert" className="mb-6 rounded-lg border border-rose-500/30 bg-rose-500/5 p-4 text-sm">
-            <p className="font-medium text-rose-300">Can&apos;t reach the edge engine on port 3030</p>
+            <p className="font-medium text-rose-300">Can&apos;t reach the edge engine</p>
             <p className="mt-1 text-muted-foreground">
-              Start it with <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">cd mini-services/edge-engine && bun run dev</code>
+              {process.env.NODE_ENV === "development" ? (
+                <>Start it with <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">cd mini-services/edge-engine && bun run dev</code></>
+              ) : (
+                "The engine may be cold-starting — it retries automatically, give it a few seconds."
+              )}
             </p>
           </div>
         )}

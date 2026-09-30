@@ -13,6 +13,7 @@ Exit code 0 = all green.
 from __future__ import annotations
 
 import json
+import os
 import re
 import socket
 import urllib.request
@@ -601,19 +602,23 @@ def audit_durability(page: Page) -> None:
     print("\n== DURABILITY (engine restart) ==")
     before = state_of(page)
     local = before["devices"][0]["total_points"]
+    err = None
     try:
         subprocess.run(["sh", "-c", "pkill -f 'src/main.py' || true"], check=False, timeout=10)
         time.sleep(2)
         subprocess.Popen(
             ["bash", "start.sh"],
             cwd=str(Path(__file__).resolve().parents[2] / "mini-services" / "edge-engine"),
+            env={**os.environ, "EDGE_PORT": "3030"},  # job-level PORT is Next's, not the engine's
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
         )
         alive = wait_for(lambda: page.request.get(f"{BASE}/api/edge/health?XTransformPort=3030",
                                                   timeout=3000).ok, 60, 2)
     except Exception as e:  # noqa: BLE001
-        alive, local = False, local
-        check("feasibility", "edge-engine restarts", False, str(e)[:120])
+        alive, local, err = False, local, str(e)[:120]
+        check("feasibility", "edge-engine restarts", False, err)
+    if not alive and err is None:
+        check("feasibility", "edge-engine restarts", False, "health never came back within 60s")
     if alive:
         after = state_of(page)
         hp = page.request.get(f"{BASE}/api/edge/health?XTransformPort=3030").json()
@@ -662,7 +667,7 @@ def audit_new_features(page: Page) -> None:
 
     # ---- F1: real multi-host federation ---------------------------------
     fleet = page.request.get(edge_url("fleet")).json()
-    by_id = {d["id"]: d for d in fleet["devices"]}
+    by_id = {d["id"]: d for d in fleet.get("devices") or []}  # an error payload reports as 0 devices, not a crash
     beta, gamma = by_id.get("device-beta", {}), by_id.get("device-gamma", {})
     check("capability", "federated peer is probed live, not a static stub",
           beta.get("federated") is True and beta.get("reachable") is True

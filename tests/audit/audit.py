@@ -28,7 +28,7 @@ BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:3001").rstrip("/
 SHOTS = Path(__file__).parent / "shots"
 SHOTS.mkdir(parents=True, exist_ok=True)
 
-TABS = ["Overview", "Memory", "Search", "Sync", "Metrics", "Activity", "Cloud", "Policy"]
+TABS = ["Home", "Search", "Knowledge", "Sync", "Fleet", "Policy", "Activity"]
 
 results: list[tuple[str, str, bool, str]] = []
 
@@ -61,12 +61,8 @@ def tab(page: Page, name: str) -> None:
     page.wait_for_timeout(900)
 
 
-def panel(page: Page, has: str):
-    return page.locator("[role=tabpanel]").filter(has_text=has).first
-
-
 def stat(page: Page, label: str) -> str:
-    """Value next to a micro-label like 'LOCAL PTS' / 'QUEUE'."""
+    """Value next to a label like 'Local points' / 'Queued'."""
     loc = page.locator(f"text={label}").first
     if loc.count() == 0:
         return ""
@@ -134,9 +130,9 @@ def audit_boot(page: Page) -> None:
 # ---------------------------------------------------------------------------
 def audit_ui(page: Page) -> None:
     print("\n== UI ==")
-    tab(page, "Overview")
-    for label in ("LOCAL PTS", "CLOUD PTS", "QUEUE", "CONFLICTS"):
-        check("ui", f"overview stat '{label}' present", page.locator(f"text={label}").count() > 0)
+    tab(page, "Home")
+    for label in ("Local points", "Cloud points", "Queued", "Conflicts"):
+        check("ui", f"home stat '{label}' present", page.locator(f"text={label}").count() > 0)
 
     # horizontal overflow at desktop + mobile
     for w, h, tagname in ((1440, 960, "desktop"), (390, 844, "mobile")):
@@ -161,7 +157,7 @@ def audit_ui(page: Page) -> None:
                     t,
                 )
                 check("ui", f"tab trigger not covered by panel · {t}", hit == "ok", hit)
-        tab(page, "Overview")
+        tab(page, "Home")
         shot(page, f"{tagname}-overview", full=True)
     page.set_viewport_size({"width": 1440, "height": 960})
     page.wait_for_timeout(500)
@@ -180,7 +176,7 @@ def audit_ux(page: Page) -> None:
     # empty state for a shard with no points. The sensors shard is seeded with
     # raw telemetry for the TTL demo, so drain it first, then put telemetry back
     # (seed_devices only re-seeds an empty shard on restart).
-    tab(page, "Memory")
+    tab(page, "Knowledge")
     q = lambda path: f"{BASE}/api/edge/{path}?XTransformPort=3030"
     for pt in page.request.get(q("points") + "&shard=sensors&limit=200").json().get("points", []):
         page.request.post(q("point/delete"), data={"device": "device-alpha", "shard": "sensors", "id": pt["id"]})
@@ -232,16 +228,6 @@ def audit_ux(page: Page) -> None:
         except Exception as e:  # noqa: BLE001
             check("ux", "activity export downloads a file", False, str(e)[:120])
 
-    tab(page, "Metrics")
-    met_export = page.get_by_role("button", name="EXPORT")
-    check("ux", "metrics has export", met_export.count() > 0)
-    if met_export.count():
-        try:
-            with page.expect_download(timeout=8000) as dl:
-                met_export.first.click()
-            check("ux", "metrics export downloads a file", bool(dl.value.suggested_filename), dl.value.suggested_filename)
-        except Exception as e:  # noqa: BLE001
-            check("ux", "metrics export downloads a file", False, str(e)[:120])
 
 
 # ---------------------------------------------------------------------------
@@ -273,11 +259,11 @@ def audit_capability(page: Page) -> None:
     tab(page, "Search")
     q = page.get_by_placeholder("e.g. seen this vibration pattern before?")
     q.fill("bearing vibration pump")
-    panel(page, "Search Playground").get_by_role("button", name="Search", exact=True).click()
+    active_panel(page).get_by_role("button", name="Search", exact=True).click()
     page.wait_for_timeout(2500)
     shot(page, "cap-search-online", full=True)
     txt = page.inner_text("body")
-    check("capability", "search UI renders results with scores", "1.0" in txt or "score" in txt.lower() or "RRF" in txt)
+    check("capability", "search UI renders results with scores", "fused" in txt or "score" in txt.lower())
 
     # (4) OFFLINE: toggle connectivity, search must still work with zero network
     sw = page.locator("header [role=switch]").first
@@ -376,7 +362,7 @@ def audit_capability(page: Page) -> None:
     page.wait_for_timeout(500)
     page.get_by_role("option", name="sync_now", exact=True).click()
     page.wait_for_timeout(500)
-    active_panel(page).get_by_role("button", name=re.compile("save policy")).click()
+    active_panel(page).get_by_role("button", name=re.compile("save policy", re.I)).click()
     page.wait_for_timeout(1200)
     check("capability", "saving policy gives feedback",
           wait_for(lambda: "Policy saved" in page.inner_text("body"), 8))
@@ -399,11 +385,11 @@ def audit_capability(page: Page) -> None:
           ", ".join(r.get("slug", "?") for r in found.get("results", [])[:3]))
 
     # (10) metrics + activity reflect live traffic
-    tab(page, "Metrics")
+    tab(page, "Activity")
     page.wait_for_timeout(1200)
     shot(page, "cap-metrics", full=True)
     mtxt = page.inner_text("body")
-    check("capability", "metrics show live latency data", any(c.isdigit() for c in mtxt) and "System Health" in mtxt)
+    check("capability", "metrics show live latency data", any(c.isdigit() for c in mtxt) and "search latency" in mtxt.lower())
     act = page.request.get(f"{BASE}/api/edge/activity?XTransformPort=3030&device=device-alpha&limit=100").json()
     check("capability", "activity log records system events", len(act.get("entries", [])) > 5, f"{len(act.get('entries', []))} entries")
 
@@ -426,7 +412,7 @@ def audit_ai_workflow(page: Page) -> None:
     tab(page, "Search")
     q = page.get_by_placeholder("e.g. seen this vibration pattern before?")
     q.fill("bearing vibration pump")
-    panel(page, "Search Playground").get_by_role("button", name="Search", exact=True).click()
+    active_panel(page).get_by_role("button", name="Search", exact=True).click()
     page.wait_for_timeout(2500)
     distill = page.get_by_role("button", name=re.compile(r"distill", re.I))
     check("ux", "Distill affordance surfaced on search results", distill.count() > 0, f"{distill.count()} buttons")
@@ -443,7 +429,7 @@ def audit_ai_workflow(page: Page) -> None:
 
 
     # AUTO-TAG in the write form: cloud LLM classifies the note in place
-    tab(page, "Memory")
+    tab(page, "Knowledge")
     pane = active_panel(page)
     pane.get_by_placeholder(re.compile(r"Paste a manual")).fill(
         "Bearing P-202 overheating, production line stopped for 40 minutes.")
@@ -568,7 +554,7 @@ def audit_accessibility(page: Page) -> None:
     check("ux", "page declares a single <h1>", worst["h1"] == 1, f"h1 count = {worst['h1']}")
     check("ux", "html lang declared", bool(worst["lang"]), worst["lang"] or "(unset)")
     check("ux", "images have alt text", worst["missingAlt"] == 0, f"{worst['missingAlt']} missing")
-    tab(page, "Overview")
+    tab(page, "Home")
 
 
 def audit_offline_purity(browser) -> None:  # noqa: ANN001
@@ -710,7 +696,7 @@ def audit_new_features(page: Page) -> None:
             detail = f"{ip}:3031 blocked by host firewall — peer bind={bind}"
     check("capability", "peer engine answers over a non-loopback address", over_lan, detail)
 
-    tab(page, "Overview")
+    tab(page, "Fleet")
     fed_badge = page.get_by_text("federated", exact=True)
     check("ux", "fleet panel labels the federated member", fed_badge.count() > 0,
           f"{fed_badge.count()} badge(s)")
@@ -726,11 +712,11 @@ def audit_new_features(page: Page) -> None:
     check("capability", "cloud collections hold fleet knowledge",
           cols.get("total_points", 0) > 0, f"{cols.get('total_points')} points")
 
-    tab(page, "Cloud")
+    tab(page, "Fleet")
     rows = page.locator('[data-testid="cloud-collection-row"]')
-    check("ux", "Cloud tab lists every cloud collection", rows.count() >= 3, f"{rows.count()} rows")
+    check("ux", "Fleet tab lists every cloud collection", rows.count() >= 3, f"{rows.count()} rows")
     pts = page.locator('[data-testid="cloud-point-row"]')
-    check("ux", "Cloud tab browses collection points", wait_for(lambda: pts.count() > 0, 12),
+    check("ux", "Fleet tab browses collection points", wait_for(lambda: pts.count() > 0, 12),
           f"{pts.count()} point rows")
     shot(page, "cloud-collections")
 
@@ -816,9 +802,9 @@ def audit_new_features(page: Page) -> None:
               frame.splitlines()[0] if frame else "no data")
     except Exception as e:  # noqa: BLE001
         check("capability", "engine metrics stream over server-sent events", False, str(e)[:120])
-    tab(page, "Metrics")
+    tab(page, "Activity")
     sse = page.locator('[data-testid="sse-status"]')
-    check("ux", "Metrics tab shows a live SSE connection",
+    check("ux", "Activity tab shows a live SSE connection",
           wait_for(lambda: sse.count() > 0 and sse.get_attribute("data-conn") == "live", 15),
           sse.get_attribute("data-conn") if sse.count() else "missing")
     shot(page, "metrics-sse")
@@ -861,9 +847,9 @@ def audit_new_features(page: Page) -> None:
           == pol.get("ttl_raw_sensor_seconds"),
           f"ttl={pol.get('ttl_raw_sensor_seconds')}s")
 
-    tab(page, "Metrics")
+    tab(page, "Policy")
     run_btn = page.locator('[data-testid="retention-run"]')
-    check("ux", "Metrics tab exposes a retention sweep control", run_btn.count() > 0,
+    check("ux", "Policy tab exposes a retention sweep control", run_btn.count() > 0,
           "Run retention sweep")
 
 

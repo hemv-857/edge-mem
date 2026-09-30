@@ -1,237 +1,51 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { useEffect, useRef, useState } from "react";
-import {
-  LineChart, Zap, Activity as ActivityIcon, Search, Database,
-  RefreshCw, Cloud, TrendingUp, Clock, Cpu, ArrowUpRight, ArrowDownRight, Gauge, Download,
-  Radio, Timer, Trash2,
-} from "lucide-react";
+import { useEffect, useState } from "react";
+import { GitMerge, RefreshCw, Search, Timer } from "lucide-react";
 import type { EdgeHook } from "@/hooks/use-edge";
-import type { ActivityEntry, RetentionStatus } from "@/lib/edge-types";
-import { edge as edgeApi } from "@/lib/edge-api";
-import { toast } from "@/hooks/use-toast";
-import { Button } from "@/components/ui/button";
-import { Panel, StatCard, formatRelative } from "./edge-ui";
+import type { ActivityEntry } from "@/lib/edge-types";
+import { BigStat, BigStats, Hl, PageHero, Panel, Readout, Tag } from "./edge-ui";
 
+/** Top of the Activity tab: live engine counters and on-device search latency. */
 export default function MetricsPanel({ edge }: { edge: EdgeHook }) {
-  const activity = edge.activity;
-  const memory = edge.memory;
-  const ss = edge.syncStatus;
-
-  // derive search latency samples from the activity log (kind=search with latency_ms in meta)
-  const searchSamples = extractSearchLatency(activity);
-  const latencies = searchSamples.map((s) => s.latencyMs);
-  const avgLatency = latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : 0;
-  const maxLatency = latencies.length ? Math.max(...latencies) : 0;
-  const minLatency = latencies.length ? Math.min(...latencies) : 0;
-
-  // count event kinds
-  const counts = countKinds(activity);
-  const totalEvents = activity.length;
-
-  // offline vs online search breakdown
-  const offlineSearches = searchSamples.filter((s) => s.offline).length;
-  const onlineSearches = searchSamples.length - offlineSearches;
-
-  // per-shard point counts
-  const shards = memory ? Object.values(memory.shards) : [];
-  const totalPoints = memory?.total_points ?? 0;
-
+  const h = lastHour(edge.activity);
+  const lat = extractSearchLatency(edge.activity).map((x) => x.latencyMs);
+  const open = edge.syncStatus?.open_conflicts.length ?? 0;
+  const avg = lat.length ? lat.reduce((a, b) => a + b, 0) / lat.length : null;
   return (
-    <div className="space-y-5">
-      {/* top stats */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard
-          label="Avg search latency"
-          value={avgLatency > 0 ? `${avgLatency.toFixed(1)} ms` : "—"}
-          sub={latencies.length > 0 ? `${latencies.length} samples` : "run a search"}
-          accent={avgLatency > 0 && avgLatency < 50 ? "emerald" : avgLatency > 200 ? "rose" : "default"}
-          icon={<Zap className="h-4 w-4" />}
-        />
-        <StatCard
-          label="Min / Max"
-          value={latencies.length > 0 ? `${minLatency.toFixed(1)} / ${maxLatency.toFixed(1)}` : "—"}
-          sub="latency range (ms)"
-          icon={<Gauge className="h-4 w-4" />}
-        />
-        <StatCard
-          label="Offline searches"
-          value={offlineSearches}
-          sub={`${onlineSearches} online`}
-          accent={offlineSearches > 0 ? "amber" : "default"}
-          icon={<Cloud className="h-4 w-4" />}
-        />
-        <StatCard
-          label="Total events"
-          value={totalEvents}
-          sub="logged actions"
-          icon={<ActivityIcon className="h-4 w-4" />}
-        />
-      </div>
-
-      {/* live metrics — pushed over SSE rather than polled */}
-      <LiveMetricsPanel />
-
-      <div className="grid gap-5 lg:grid-cols-3">
-        {/* latency chart */}
-        <Panel
-          title="Search Latency Trend"
-          desc="On-device hybrid retrieval latency over recent searches"
-          className="lg:col-span-2"
-          right={<LineChart className="h-3.5 w-3.5 text-emerald-400" />}
-        >
-          {latencies.length === 0 ? (
-            <div className="flex h-48 flex-col items-center justify-center gap-2 text-center">
-              <LineChart className="h-6 w-6 text-muted-foreground/40" />
-              <p className="text-xs text-muted-foreground">No search samples yet.</p>
-              <p className="font-mono text-[10px] text-muted-foreground/70">Run searches in the Search tab to populate the chart.</p>
-            </div>
-          ) : (
-            <LatencyChart samples={searchSamples} />
-          )}
-        </Panel>
-
-        {/* event kind breakdown */}
-        <Panel title="Event Breakdown" desc="Action distribution across the fleet" right={
-          <button
-            onClick={() => {
-              const lines = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}\t${v}`).join("\n");
-              const blob = new Blob([`kind\tcount\n${lines}\ntotal\t${totalEvents}`], { type: "text/tab-separated-values" });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a"); a.href = url; a.download = `edge-metrics-${Date.now()}.tsv`; a.click();
-              URL.revokeObjectURL(url);
-            }}
-            disabled={totalEvents === 0}
-            className="flex items-center gap-1 rounded-md border border-border bg-card/50 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
-          >
-            <Download className="h-3 w-3" /> export
-          </button>
-        }>
-          <div className="space-y-2">
-            {Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([kind, count]) => {
-              const pct = totalEvents > 0 ? Math.round((count / totalEvents) * 100) : 0;
-              const color = KIND_COLOR[kind] ?? "bg-zinc-500";
-              return (
-                <div key={kind}>
-                  <div className="flex items-center justify-between font-mono text-[11px]">
-                    <span className="uppercase tracking-wider text-muted-foreground">{kind}</span>
-                    <span className="flex items-center gap-1.5 tabular-nums text-foreground">{count}<span className="text-[9px] text-muted-foreground/60">{pct}%</span></span>
-                  </div>
-                  <div className="mt-1 h-2 overflow-hidden rounded-full bg-muted">
-                    <div className={cn("h-full rounded-full transition-all", color)} style={{ width: `${Math.max(pct, 4)}%` }} />
-                  </div>
-                </div>
-              );
-            })}
-            {totalEvents === 0 && (
-              <div className="py-6 text-center text-xs text-muted-foreground">No events logged.</div>
-            )}
-          </div>
-        </Panel>
-      </div>
-
-      <div className="grid gap-5 lg:grid-cols-2">
-        {/* per-shard point distribution */}
-        <Panel title="Shard Distribution" desc="Point counts across local EdgeShards">
-          <div className="space-y-3">
-            {shards.map((s) => {
-              const pct = totalPoints > 0 ? Math.round((s.points / totalPoints) * 100) : 0;
-              return (
-                <div key={s.name}>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Database className="h-3 w-3 text-muted-foreground" />
-                      <span className="font-mono text-xs text-foreground">{s.name}</span>
-                      <span className="font-mono text-[9px] text-muted-foreground/60">{s.default_sync}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs tabular-nums text-foreground">{s.points}</span>
-                      <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{pct}%</span>
-                    </div>
-                  </div>
-                  <div className="mt-1 h-2 overflow-hidden rounded-full bg-muted">
-                    <div
-                      className={cn("h-full rounded-full transition-all",
-                        s.name === "manuals" ? "bg-sky-400" : s.name === "incidents" ? "bg-amber-400" : "bg-emerald-400")}
-                      style={{ width: `${Math.max(pct, 2)}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-            {shards.length === 0 && <div className="py-6 text-center text-xs text-muted-foreground">No memory data.</div>}
-          </div>
-        </Panel>
-
-        {/* sync throughput */}
-        <Panel title="Sync Throughput" desc="Bytes pushed and pulled across syncs">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
-              <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-emerald-300">
-                <ArrowUpRight className="h-3 w-3" /> pushed
-              </div>
-              <div className="mt-1 text-xl font-semibold tabular-nums text-foreground">{formatBytes(ss?.bytes_pushed ?? 0)}</div>
-              <div className="text-[10px] font-mono text-muted-foreground">edge → cloud</div>
-            </div>
-            <div className="rounded-lg border border-sky-500/20 bg-sky-500/5 p-3">
-              <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-sky-300">
-                <ArrowDownRight className="h-3 w-3" /> pulled
-              </div>
-              <div className="mt-1 text-xl font-semibold tabular-nums text-foreground">{formatBytes(ss?.bytes_pulled ?? 0)}</div>
-              <div className="text-[10px] font-mono text-muted-foreground">cloud → edge</div>
-            </div>
-            <div className="col-span-2 rounded-lg border border-border bg-card/40 p-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-                  <Clock className="h-3 w-3" /> last sync
-                </div>
-                <span className="font-mono text-[11px] text-foreground">{ss?.last_sync_at ? new Date(ss.last_sync_at).toLocaleTimeString() : "never"}</span>
-              </div>
-              {ss?.last_sync_summary && (
-                <div className="mt-2 grid grid-cols-3 gap-2 font-mono text-[10px]">
-                  <div>
-                    <div className="text-muted-foreground">pushed</div>
-                    <div className="text-emerald-400">{ss.last_sync_summary.pushed}{ss.last_sync_summary.pushed === 0 && <span className="ml-1 text-muted-foreground/50">(nothing new)</span>}</div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground">pulled</div>
-                    <div className="text-sky-400">{ss.last_sync_summary.pulled}{ss.last_sync_summary.pulled === 0 && <span className="ml-1 text-muted-foreground/50">(up to date)</span>}</div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground">conflicts</div>
-                    <div className={ss.last_sync_summary.new_conflicts > 0 ? "text-rose-400" : "text-muted-foreground"}>{ss.last_sync_summary.new_conflicts}</div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </Panel>
-
-        {/* system health score */}
-        <Panel title="System Health" desc="Aggregate edge intelligence score">
-          <SystemHealth ss={ss} memory={memory} searchSamples={searchSamples} />
-        </Panel>
-
-        {/* TTL retention of raw telemetry */}
-        <RetentionPanel edge={edge} />
-      </div>
-
-      {/* engine info */}
-      <Panel title="Engine Configuration" desc="The on-device vector engine powering this edge intelligence">
-        <div className="grid grid-cols-2 gap-3 font-mono text-[11px] sm:grid-cols-4">
-          <InfoItem icon={<Cpu className="h-3 w-3" />} label="engine" value="Qdrant Edge (EdgeShard)" />
-          <InfoItem icon={<Zap className="h-3 w-3" />} label="dense" value="FastEmbed bge-small-en (384d)" />
-          <InfoItem icon={<Search className="h-3 w-3" />} label="sparse" value="BM25 (on-device)" />
-          <InfoItem icon={<TrendingUp className="h-3 w-3" />} label="fusion" value="RRF (k=2)" />
-          <InfoItem icon={<Database className="h-3 w-3" />} label="shards" value={`${shards.length} local + cloud`} />
-          <InfoItem icon={<RefreshCw className="h-3 w-3" />} label="sync" value="dual-write + manifest-diff" />
-          <InfoItem icon={<Cloud className="h-3 w-3" />} label="cloud LLM" value="OpenAI-compatible API" />
-          <InfoItem icon={<Cpu className="h-3 w-3" />} label="runtime" value="single-threaded http.server" />
-        </div>
-      </Panel>
+    <div className="grid gap-6 lg:grid-cols-3 xl:grid-cols-12">
+      <PageHero
+        className="lg:col-span-3 xl:col-span-12"
+        tone={open > 0 ? "crit" : "ok"}
+        title={<><Hl>{h.total} {h.total === 1 ? "event" : "events"}</Hl> in the last hour.</>}
+        sub="Every write, search, sync and link change on this device, as it happens."
+        stats={
+          <BigStats>
+            <BigStat icon={<Search />} label="Searches" value={h.search} hint="last hour" />
+            <BigStat icon={<Timer />} label="Avg search" value={avg === null ? "—" : `${avg.toFixed(0)}ms`} tone={avg === null ? undefined : avg < 50 ? "ok" : avg > 200 ? "crit" : "warn"} hint={`last ${lat.length || 0} searches`} />
+            <BigStat icon={<RefreshCw />} label="Syncs" value={h.sync} hint="last hour" />
+            <BigStat icon={<GitMerge />} label="Conflicts" value={h.conflict} tone={open > 0 ? "crit" : undefined} hint={open > 0 ? `${open} still open` : "last hour, resolved"} />
+          </BigStats>
+        }
+      />
+      <LiveMetrics className="xl:col-span-4" />
+      <SearchLatency activity={edge.activity} className="lg:col-span-2 xl:col-span-8" />
     </div>
   );
+}
+
+function lastHour(activity: ActivityEntry[]) {
+  const since = Date.now() - 60 * 60 * 1000;
+  const out = { total: 0, search: 0, sync: 0, conflict: 0 };
+  for (const e of activity) {
+    if (e.ts < since) continue;
+    out.total++;
+    if (e.kind === "search") out.search++;
+    else if (e.kind === "sync") out.sync++;
+    else if (e.kind === "conflict") out.conflict++;
+  }
+  return out;
 }
 
 interface LiveSnap {
@@ -244,225 +58,60 @@ interface LiveSnap {
   open_conflicts: number;
 }
 
-/** Live metric readouts fed by the SSE relay at /api/edge/stream.
- *  Falls back to the last snapshot (stale badge) if the stream drops. */
-function LiveMetricsPanel() {
+/** Fed by the SSE relay at /api/edge/stream; keeps the last frame (marked stale) if the stream drops. */
+function LiveMetrics({ className }: { className?: string }) {
   const [snap, setSnap] = useState<LiveSnap | null>(null);
   const [conn, setConn] = useState<"connecting" | "live" | "stale">("connecting");
-  const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof EventSource === "undefined") {
-      // no EventSource (SSR / old browser) — flip to stale on the next tick
       const id = setTimeout(() => setConn("stale"), 0);
       return () => clearTimeout(id);
     }
     const es = new EventSource("/api/edge/stream");
-    esRef.current = es;
     es.addEventListener("metrics", (ev) => {
       try {
         setSnap(JSON.parse((ev as MessageEvent).data) as LiveSnap);
         setConn("live");
-      } catch {
-        /* ignore malformed frame */
-      }
+      } catch { /* ignore malformed frame */ }
     });
     es.onerror = () => setConn("stale");
-    return () => {
-      es.close();
-      esRef.current = null;
-    };
+    return () => es.close();
   }, []);
 
-  const cells = [
-    { label: "local pts", value: snap?.local_points, accent: "text-foreground" },
-    { label: "cloud pts", value: snap?.cloud_points, accent: "text-emerald-400" },
-    { label: "devices", value: snap === null ? null : snap.devices, accent: "text-foreground" },
-    { label: "peers up", value: snap?.federated_reachable, accent: "text-violet-300" },
-    { label: "queue", value: snap?.queue_depth, accent: (snap?.queue_depth ?? 0) > 0 ? "text-amber-400" : "text-foreground" },
-    { label: "conflicts", value: snap?.open_conflicts, accent: (snap?.open_conflicts ?? 0) > 0 ? "text-rose-400" : "text-foreground" },
-  ];
+  const v = (n: number | undefined) => (n === undefined ? "—" : n);
 
   return (
     <Panel
-      title="Live Metrics"
-      desc="Streamed from the engine over server-sent events — no client polling"
+      title="Live"
+      className={cn("h-full", className)}
+      flush
+      fill
       right={
-        <span
-          data-testid="sse-status"
-          data-conn={conn}
-          className={cn(
-            "flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider",
-            conn === "live" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-              : conn === "connecting" ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
-              : "border-border bg-muted/40 text-muted-foreground"
-          )}
-        >
-          <Radio className={cn("h-3 w-3", conn === "live" && "edge-pulse")} />
-          {conn === "live" ? "sse live" : conn === "connecting" ? "connecting" : "stale"}
+        <span data-testid="sse-status" data-conn={conn}>
+          <Tag tone={conn === "live" ? "ok" : conn === "connecting" ? "warn" : "dim"} title={snap ? `last frame ${new Date(snap.ts).toLocaleTimeString()}` : undefined}>
+            {conn === "live" ? "streaming" : conn === "connecting" ? "connecting" : "stale"}
+          </Tag>
         </span>
       }
     >
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        {cells.map((c) => (
-          <div key={c.label} className="rounded-lg border border-border bg-card/40 px-3 py-2">
-            <div className="text-[9px] uppercase tracking-wider text-muted-foreground">{c.label}</div>
-            <div className={cn("mt-0.5 font-mono text-lg font-semibold tabular-nums", c.accent)}>
-              {c.value === null || c.value === undefined ? "—" : c.value}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] text-muted-foreground">
-        <span>source: <span className="text-foreground">/api/edge/stream</span></span>
-        <span>latest: <span className="text-foreground">{snap ? new Date(snap.ts).toLocaleTimeString() : "—"}</span></span>
-        <span>poll-free · 1s server tick</span>
-      </div>
+      {/* hairline grid of counters that fills the row height set by the latency chart */}
+      <dl className="grid flex-1 grid-cols-2 gap-px overflow-hidden rounded-b-xl bg-border/70 sm:grid-cols-3 lg:grid-cols-2 lg:grid-rows-3 [&>div]:flex [&>div]:flex-col [&>div]:justify-center [&>div]:bg-card [&>div]:px-5 [&>div]:py-3">
+        <Readout large label="Local points" value={v(snap?.local_points)} />
+        <Readout large label="Cloud points" value={v(snap?.cloud_points)} />
+        <Readout large label="Devices" value={v(snap?.devices)} />
+        <Readout large label="Peers up" value={v(snap?.federated_reachable)} />
+        <Readout large label="Queued" value={v(snap?.queue_depth)} tone={(snap?.queue_depth ?? 0) > 0 ? "warn" : undefined} />
+        <Readout large label="Conflicts" value={v(snap?.open_conflicts)} tone={(snap?.open_conflicts ?? 0) > 0 ? "crit" : undefined} />
+      </dl>
     </Panel>
   );
 }
-
-/** TTL retention: expire raw telemetry older than policy.ttl_raw_sensor_seconds. */
-function RetentionPanel({ edge }: { edge: EdgeHook }) {
-  const ttl = edge.state?.policy.ttl_raw_sensor_seconds ?? 600;
-  const [status, setStatus] = useState<RetentionStatus | null>(null);
-  const [running, setRunning] = useState(false);
-
-  useEffect(() => {
-    edgeApi.retentionStatus().then(setStatus).catch(() => undefined);
-  }, [edge.activity.length]);
-
-  async function run() {
-    setRunning(true);
-    try {
-      const r = await edgeApi.runRetention();
-      setStatus(r);
-      await edge.refresh();
-      toast({
-        title: r.expired ? "Retention sweep complete" : "Retention sweep — nothing expired",
-        description: `${r.expired} of ${r.checked} raw sensor points older than ${r.ttl_seconds}s removed`,
-      });
-    } catch (e) {
-      toast({ title: "Retention failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  return (
-    <Panel
-      title="TTL Retention"
-      desc={`Raw telemetry older than ${ttl}s is dropped from the sensors shard`}
-      right={<Timer className="h-3.5 w-3.5 text-muted-foreground" />}
-    >
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <div className="rounded-lg border border-border bg-card/40 px-3 py-2">
-          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">ttl</div>
-          <div className="mt-0.5 font-mono text-lg font-semibold tabular-nums text-foreground">{ttl}s</div>
-        </div>
-        <div className="rounded-lg border border-border bg-card/40 px-3 py-2">
-          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">expired (total)</div>
-          <div className={cn("mt-0.5 font-mono text-lg font-semibold tabular-nums", (status?.expired_total ?? 0) > 0 ? "text-amber-400" : "text-foreground")}>
-            {status?.expired_total ?? "—"}
-          </div>
-        </div>
-        <div className="col-span-2 rounded-lg border border-border bg-card/40 px-3 py-2 sm:col-span-1">
-          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">last run</div>
-          <div className="mt-0.5 truncate font-mono text-sm text-foreground">{formatRelative(status?.last_run ?? null)}</div>
-        </div>
-      </div>
-      <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-        The <span className="font-mono text-emerald-300">sensors</span> shard is the raw firehose — everything in it is subject to the TTL.
-        Distilled knowledge in manuals/incidents is never swept.
-      </p>
-      <Button size="sm" variant="outline" onClick={run} disabled={running}
-        className="mt-3 gap-1.5 font-mono text-xs" data-testid="retention-run">
-        {running ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-        Run retention sweep
-      </Button>
-    </Panel>
-  );
-}
-
-const KIND_COLOR: Record<string, string> = {
-  write: "bg-emerald-400",
-  search: "bg-sky-400",
-  sync: "bg-emerald-400",
-  bootstrap: "bg-sky-400",
-  connectivity: "bg-amber-400",
-  conflict: "bg-rose-400",
-  queue: "bg-amber-400",
-  policy: "bg-zinc-400",
-  demo: "bg-amber-400",
-  seed: "bg-emerald-400",
-  system: "bg-zinc-500",
-};
 
 interface SearchSample {
   ts: number;
   latencyMs: number;
   offline: boolean;
-  shard: string;
-  mode: string;
-  hits: number;
-}
-
-function SystemHealth({ ss, memory, searchSamples }: { ss: import("@/lib/edge-types").SyncStatus | null; memory: import("@/lib/edge-types").MemoryStats | null; searchSamples: SearchSample[] }) {
-  // Compute a 0-100 health score from 4 signals:
-  //  - memory populated (has points) — 25
-  //  - low avg latency (<80ms) — 25 (scaled)
-  //  - no open conflicts — 25 (scaled by count)
-  //  - synced recently (<5min) OR never needed — 25
-  const totalPoints = memory?.total_points ?? 0;
-  const memScore = Math.min(25, totalPoints > 0 ? 25 : 0);
-  const avgLat = searchSamples.length ? searchSamples.reduce((a, s) => a + s.latencyMs, 0) / searchSamples.length : 0;
-  const latScore = searchSamples.length === 0 ? 15 : Math.max(0, 25 - Math.max(0, (avgLat - 20) / 2));
-  const openConflicts = ss?.open_conflicts.length ?? 0;
-  const confScore = Math.max(0, 25 - openConflicts * 8);
-  const lastSync = ss?.last_sync_at;
-  const syncAgeMs = lastSync ? Date.now() - lastSync : null;
-  const syncScore = syncAgeMs === null ? 15 : syncAgeMs < 5 * 60 * 1000 ? 25 : syncAgeMs < 30 * 60 * 1000 ? 15 : 5;
-  const total = Math.round(memScore + latScore + confScore + syncScore);
-  const grade = total >= 85 ? "A" : total >= 70 ? "B" : total >= 50 ? "C" : "D";
-  const gradeColor = total >= 85 ? "text-emerald-400" : total >= 70 ? "text-sky-300" : total >= 50 ? "text-amber-300" : "text-rose-400";
-
-  const signals = [
-    { label: "memory", value: memScore, max: 25, color: "bg-emerald-400", note: totalPoints > 0 ? `${totalPoints} pts` : "empty" },
-    { label: "latency", value: latScore, max: 25, color: "bg-sky-400", note: avgLat > 0 ? `${avgLat.toFixed(0)}ms avg` : "no data" },
-    { label: "conflicts", value: confScore, max: 25, color: "bg-rose-400", note: `${openConflicts} open` },
-    { label: "sync freshness", value: syncScore, max: 25, color: "bg-amber-400", note: syncAgeMs === null ? "n/a" : syncAgeMs < 60000 ? "just now" : `${Math.floor(syncAgeMs / 60000)}m ago` },
-  ];
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-4">
-        <div className="relative flex h-20 w-20 shrink-0 items-center justify-center">
-          <svg viewBox="0 0 40 40" className="absolute inset-0 -rotate-90">
-            <circle cx="20" cy="20" r="16" fill="none" stroke="currentColor" strokeWidth="3" className="text-muted/30" />
-            <circle cx="20" cy="20" r="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"
-              className={total >= 85 ? "text-emerald-400" : total >= 70 ? "text-sky-400" : total >= 50 ? "text-amber-400" : "text-rose-400"}
-              strokeDasharray={`${(total / 100) * 100.5} 100.5`}
-            />
-          </svg>
-          <div className="text-center">
-            <div className={cn("font-mono text-xl font-bold tabular-nums", gradeColor)}>{total}</div>
-            <div className={cn("font-mono text-[9px] uppercase", gradeColor)}>{grade}</div>
-          </div>
-        </div>
-        <div className="flex-1 space-y-1.5">
-          {signals.map((s) => (
-            <div key={s.label} className="flex items-center gap-2">
-              <span className="w-24 shrink-0 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{s.label}</span>
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                <div className={cn("h-full rounded-full", s.color)} style={{ width: `${(s.value / s.max) * 100}%` }} />
-              </div>
-              <span className="w-20 shrink-0 text-right font-mono text-[9px] text-muted-foreground">{s.note}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function extractSearchLatency(activity: ActivityEntry[]): SearchSample[] {
@@ -470,87 +119,66 @@ function extractSearchLatency(activity: ActivityEntry[]): SearchSample[] {
   for (const a of activity) {
     if (a.kind !== "search") continue;
     const m = a.meta ?? {};
-    const latency = typeof m.latency_ms === "number" ? m.latency_ms : undefined;
-    if (latency === undefined) continue;
-    samples.push({
-      ts: a.ts,
-      latencyMs: latency,
-      offline: Boolean(m.offline),
-      shard: typeof m.shard === "string" ? m.shard : "?",
-      mode: typeof m.mode === "string" ? m.mode : "?",
-      hits: typeof m.hits === "number" ? m.hits : 0,
-    });
+    if (typeof m.latency_ms !== "number") continue;
+    samples.push({ ts: a.ts, latencyMs: m.latency_ms, offline: Boolean(m.offline) });
   }
   return samples.sort((a, b) => a.ts - b.ts).slice(-20);
 }
 
-function countKinds(activity: ActivityEntry[]): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const a of activity) {
-    counts[a.kind] = (counts[a.kind] ?? 0) + 1;
-  }
-  return counts;
-}
+function SearchLatency({ activity, className }: { activity: ActivityEntry[]; className?: string }) {
+  const samples = extractSearchLatency(activity);
+  const lat = samples.map((s) => s.latencyMs);
+  const avg = lat.length ? lat.reduce((a, b) => a + b, 0) / lat.length : 0;
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function InfoItem({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-card/30 p-2">
-      <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-muted-foreground">
-        {icon}{label}
-      </div>
-      <div className="mt-0.5 truncate text-foreground/90">{value}</div>
-    </div>
+    <Panel
+      title="Search latency"
+      desc={lat.length > 0 ? `last ${lat.length} searches` : undefined}
+      className={className}
+      fill
+    >
+      {lat.length === 0 ? (
+        <p className="py-10 text-center text-sm text-muted-foreground">Latency appears here after the first search.</p>
+      ) : (
+        <>
+          <dl className="mb-4 flex flex-wrap gap-x-8 gap-y-3">
+            <Readout label="Average" value={`${avg.toFixed(1)} ms`} tone={avg < 50 ? "ok" : avg > 200 ? "crit" : "warn"} />
+            <Readout label="Fastest" value={`${Math.min(...lat).toFixed(1)} ms`} />
+            <Readout label="Slowest" value={`${Math.max(...lat).toFixed(1)} ms`} />
+            <Readout label="Offline" value={samples.filter((s) => s.offline).length} />
+          </dl>
+          <LatencyChart samples={samples} />
+        </>
+      )}
+    </Panel>
   );
 }
 
-function LatencyChart({ samples }: { samples: SearchSample[] }) {
+function LatencyChart({ samples, className }: { samples: SearchSample[]; className?: string }) {
   const maxLat = Math.max(...samples.map((s) => s.latencyMs), 1);
-  const w = 100; // viewBox width units
-  const h = 48;
+  const w = 100;
+  const h = 40;
   const stepX = samples.length > 1 ? w / (samples.length - 1) : 0;
-  const points = samples.map((s, i) => {
-    const x = i * stepX;
-    const y = h - (s.latencyMs / maxLat) * (h - 4) - 2;
-    return { x, y, s };
-  });
-  const path = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
-  const areaPath = `${path} L ${w} ${h} L 0 ${h} Z`;
+  const pts = samples.map((s, i) => ({ x: i * stepX, y: h - (s.latencyMs / maxLat) * (h - 4) - 2, s }));
+  const path = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
 
   return (
-    <div>
-      <div className="flex items-center justify-between font-mono text-[10px] text-muted-foreground">
-        <span>{samples.length} samples · newest last</span>
-        <span>max {maxLat.toFixed(1)} ms</span>
+    <figure className={cn("mt-auto flex flex-col", className)}>
+      <svg viewBox={`0 0 ${w} ${h}`} className="h-28 w-full sm:h-32" preserveAspectRatio="none" role="img" aria-label={`Search latency, max ${maxLat.toFixed(1)} ms`}>
+        <line x1="0" y1={h / 2} x2={w} y2={h / 2} stroke="currentColor" strokeWidth="0.2" className="text-border" vectorEffect="non-scaling-stroke" />
+        <path d={path} fill="none" strokeWidth="1.5" className="stroke-emerald-400" vectorEffect="non-scaling-stroke" />
+      </svg>
+      <div className="mt-2 flex h-2 gap-px" aria-hidden>
+        {samples.map((s, i) => <span key={i} className={cn("flex-1 rounded-sm", s.offline ? "bg-amber-400/70" : "bg-emerald-400/40")} />)}
       </div>
-      <div className="mt-2 relative">
-        <svg viewBox={`0 0 ${w} ${h}`} className="w-full" style={{ height: "160px" }} preserveAspectRatio="none">
-          {/* grid lines */}
-          <line x1="0" y1={h * 0.25} x2={w} y2={h * 0.25} stroke="currentColor" strokeWidth="0.2" className="text-muted-foreground/20" />
-          <line x1="0" y1={h * 0.5} x2={w} y2={h * 0.5} stroke="currentColor" strokeWidth="0.2" className="text-muted-foreground/20" />
-          <line x1="0" y1={h * 0.75} x2={w} y2={h * 0.75} stroke="currentColor" strokeWidth="0.2" className="text-muted-foreground/20" />
-          {/* area */}
-          <path d={areaPath} className="fill-emerald-500/10" />
-          {/* line */}
-          <path d={path} fill="none" strokeWidth="0.6" className="stroke-emerald-400" />
-          {/* dots */}
-          {points.map((p, i) => (
-            <circle key={i} cx={p.x} cy={p.y} r="0.8"
-              className={p.s.offline ? "fill-amber-400" : "fill-emerald-400"}
-            />
-          ))}
-        </svg>
-        {/* legend */}
-        <div className="mt-2 flex items-center gap-4 font-mono text-[9px] text-muted-foreground">
-          <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> online</span>
-          <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> offline</span>
-        </div>
-      </div>
-    </div>
+      <figcaption className="mt-2 flex justify-between text-xs text-muted-foreground">
+        <span>older</span>
+        <span className="flex gap-4">
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-emerald-400/40" /> online</span>
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-amber-400/70" /> offline</span>
+        </span>
+        <span>newer</span>
+      </figcaption>
+    </figure>
   );
 }

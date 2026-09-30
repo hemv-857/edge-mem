@@ -3,122 +3,65 @@
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import { Cpu, Cloud, RefreshCw, Zap, DownloadCloud, Wifi, WifiOff, Command } from "lucide-react";
+import { RefreshCw, Command, BookOpen } from "lucide-react";
 import type { EdgeHook } from "@/hooks/use-edge";
-import { StatusDot, formatRelative } from "./edge-ui";
 
-export default function TopBar({ edge, onOpenPalette }: { edge: EdgeHook; onOpenPalette?: () => void }) {
+/** One persistent command row: identity, the tabs (`nav`), then global state and actions. Below lg the tabs wrap to their own row. */
+export default function TopBar({ edge, nav, onOpenPalette, onOpenGuide }: { edge: EdgeHook; nav: React.ReactNode; onOpenPalette: () => void; onOpenGuide: () => void }) {
   const { state, syncStatus, busy } = edge;
   const online = syncStatus?.online ?? true;
   const active = state?.devices.find((d) => d.id === state.active_device);
-  const queueDepth = syncStatus?.queue_depth ?? 0;
-  const queueCritical = syncStatus?.queue_critical ?? 0;
-  const lastSync = syncStatus?.last_sync_at ?? null;
+  const queued = syncStatus?.queue_depth ?? 0;
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-6 gap-y-3 px-4 py-3 sm:px-6">
-        {/* Brand */}
-        <div className="flex items-center gap-3">
-          <div className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-emerald-500/30 bg-emerald-500/10 edge-glow-emerald">
-            <Cpu className="h-4.5 w-4.5 text-emerald-400" />
-          </div>
-          <div className="leading-tight">
-            <div className="flex items-center gap-2">
-              <h1 className="font-mono text-sm font-bold tracking-tight text-foreground">EDGE.MEM</h1>
-              <span className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
-                Qdrant Edge
-              </span>
-            </div>
-            <span className="text-[10px] text-muted-foreground">Fleet Intelligence Console</span>
-          </div>
-        </div>
-
-        {/* Active device */}
+    <div className="mx-auto flex max-w-[1760px] flex-wrap items-center gap-x-4 px-4 sm:px-6 lg:h-16 lg:flex-nowrap lg:gap-x-8 xl:px-10">
+      <div className="flex h-14 min-w-0 flex-1 basis-0 items-baseline gap-3 lg:h-auto lg:flex-none lg:basis-auto">
+        <h1 className="text-[17px] font-bold tracking-tight text-foreground">EDGE.MEM</h1>
         {active && (
-          <div className="flex items-center gap-2 rounded-lg border border-border bg-card/50 px-3 py-1.5">
-            <StatusDot online={active.online} />
-            <div className="leading-tight">
-              <div className="font-mono text-xs font-semibold text-foreground">{active.id}</div>
-              <div className="text-[10px] text-muted-foreground">{active.location}</div>
-            </div>
-          </div>
+          <span className="truncate font-mono text-sm text-muted-foreground" title={active.location}>{active.id}</span>
         )}
+      </div>
 
-        {/* Connectivity toggle — the hero control */}
-        <div className={cn(
-          "flex items-center gap-2.5 rounded-lg border px-3 py-1.5 transition-colors",
-          online ? "border-emerald-500/30 bg-emerald-500/5" : "border-amber-500/30 bg-amber-500/5"
+      <nav aria-label="Sections" className="order-last -mx-4 w-[calc(100%+2rem)] border-t border-border/60 px-4 sm:-mx-6 sm:w-[calc(100%+3rem)] sm:px-6 lg:order-none lg:mx-0 lg:w-auto lg:self-stretch lg:border-0 lg:px-0">
+        {nav}
+      </nav>
+
+      <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
+        <Button variant="ghost" size="sm" onClick={onOpenGuide} className="hidden gap-1.5 text-muted-foreground sm:inline-flex">
+          <BookOpen className="h-4 w-4" /> Guide
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onOpenPalette} aria-label="Command palette" title="Command palette (⌘K)" className="gap-1.5 text-muted-foreground">
+          <Command className="h-4 w-4" />
+          <kbd className="hidden font-mono text-xs sm:inline">⌘K</kbd>
+        </Button>
+
+        <label className={cn(
+          "flex h-8 cursor-pointer items-center gap-2 rounded-lg border px-2.5 text-sm transition-colors",
+          online ? "border-border bg-card" : "border-amber-500/40 bg-amber-500/10",
         )}>
-          {online ? <Wifi className="h-4 w-4 text-emerald-400" /> : <WifiOff className="h-4 w-4 text-amber-400" />}
-          <div className="leading-tight">
-            <div className={cn("font-mono text-[10px] font-bold uppercase tracking-wider", online ? "text-emerald-300" : "text-amber-300")}>
-              {online ? "Online" : "Offline"}
-            </div>
-            <div className="text-[9px] text-muted-foreground">{online ? "cloud reachable" : "local-only mode"}</div>
-          </div>
+          <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", online ? "bg-emerald-400" : "bg-amber-400")} />
+          <span className={cn("max-sm:sr-only", online ? "text-foreground" : "text-amber-300")}>{online ? "Online" : "Offline"}</span>
           <Switch
             checked={online}
             onCheckedChange={(v) => edge.setOnline(v)}
             disabled={!!busy}
             aria-label={online ? "Connectivity: online — switch to offline" : "Connectivity: offline — switch to online"}
-            className={cn("data-[state=checked]:bg-emerald-500 data-[state=unchecked]:bg-amber-500/70")}
+            className="data-[state=checked]:bg-emerald-500 data-[state=unchecked]:bg-amber-500/70"
           />
-        </div>
+        </label>
 
-        <div className="ml-auto flex items-center gap-2">
-          {/* ⌘K command palette trigger */}
-          {onOpenPalette && (
-            <button
-              onClick={onOpenPalette}
-              title="Command palette (⌘K)"
-              className="flex items-center gap-1.5 rounded-lg border border-border bg-card/50 px-2.5 py-1.5 font-mono text-[10px] text-muted-foreground transition-colors hover:border-emerald-500/30 hover:text-foreground"
-            >
-              <Command className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Search</span>
-              <kbd className="hidden rounded border border-border bg-muted px-1 py-0.5 text-[8px] sm:inline">⌘K</kbd>
-            </button>
-          )}
-          {/* queue mini */}
-          <div className="hidden items-center gap-2 rounded-lg border border-border bg-card/50 px-3 py-1.5 sm:flex">
-            <Zap className={cn("h-3.5 w-3.5", queueCritical > 0 ? "text-rose-400" : queueDepth > 0 ? "text-amber-400" : "text-muted-foreground")} />
-            <div className="leading-tight">
-              <div className="font-mono text-xs font-semibold tabular-nums text-foreground">
-                {queueDepth} <span className="text-muted-foreground">queued</span>
-                {queueCritical > 0 && <span className="ml-1 text-rose-400">·{queueCritical} crit</span>}
-              </div>
-              <div className="text-[9px] text-muted-foreground">sync · {formatRelative(lastSync)}</div>
-            </div>
-          </div>
-
-          {/* Cloud */}
-          <div className="hidden items-center gap-1.5 rounded-lg border border-border bg-card/50 px-3 py-1.5 md:flex">
-            <Cloud className="h-3.5 w-3.5 text-sky-300" />
-            <span className="font-mono text-xs tabular-nums text-foreground">{state?.cloud.total_points ?? 0}</span>
-            <span className="text-[9px] text-muted-foreground">cloud pts</span>
-          </div>
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => edge.bootstrap()}
-            disabled={!!busy || !online}
-            className="gap-1.5 border-border bg-card/50 font-mono text-xs"
-          >
-            <DownloadCloud className="h-3.5 w-3.5" />
-            Bootstrap
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => edge.sync()}
-            disabled={!!busy || !online}
-            className="gap-1.5 bg-emerald-500/90 font-mono text-xs text-emerald-950 hover:bg-emerald-400"
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", busy === "sync" && "animate-spin")} />
-            Sync
-          </Button>
-        </div>
+        <Button
+          size="sm"
+          onClick={() => edge.sync()}
+          disabled={!!busy || !online}
+          title={online ? "Push the queue and pull fleet updates" : "Sync needs the link"}
+          className="gap-1.5 bg-emerald-500 text-emerald-950 shadow-[inset_0_1px_0_rgb(255_255_255/0.25)] hover:bg-emerald-400"
+        >
+          <RefreshCw className={cn("h-4 w-4", busy === "sync" && "animate-spin")} />
+          <span className="max-sm:sr-only">Sync</span>
+          {queued > 0 && <span className="font-mono tabular-nums">{queued}</span>}
+        </Button>
       </div>
-    </header>
+    </div>
   );
 }

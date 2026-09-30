@@ -1,433 +1,185 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import {
-  Database, FileText, AlertTriangle, Gauge, HardDrive, Hash,
-  PenSquare, Zap, Loader2, CheckCircle2, CircuitBoard, Cloud, Sparkles,
-  Search as SearchIcon, Filter, X,
-} from "lucide-react";
+import { Loader2, Search as SearchIcon, X } from "lucide-react";
 import type { EdgeHook } from "@/hooks/use-edge";
-import type { EdgePoint, MemoryShard, WriteResult } from "@/lib/edge-types";
+import type { EdgePoint, WriteResult } from "@/lib/edge-types";
 import { edge as edgeApi } from "@/lib/edge-api";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import {
-  Panel, CriticalityBadge, SyncStateBadge, formatBytes, formatRelative,
-} from "./edge-ui";
+import { FillScroll, Hl, PageHero, Panel, CriticalityBadge, SyncStateBadge, formatRelative } from "./edge-ui";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const SHARD_ORDER = ["manuals", "incidents", "sensors"] as const;
+const CRITS = ["critical", "high", "medium", "low"] as const;
 
-const SHARD_ICONS: Record<string, React.ReactNode> = {
-  manuals: <FileText className="h-4 w-4 text-emerald-400" />,
-  incidents: <AlertTriangle className="h-4 w-4 text-amber-400" />,
-  sensors: <Gauge className="h-4 w-4 text-sky-400" />,
-};
-
-// quick-insert templates — pre-fill the form with realistic field data
+// pre-fill the form with realistic field data
 const TEMPLATES = [
-  {
-    label: "vibration incident",
-    title: "P-201 Vibration Spike",
-    criticality: "critical",
-    asset_id: "P-201",
-    text: "P-201 drive-end vibration spiked to 9.2mm/s, BPFO peak at 142Hz — confirmed outer race bearing defect. Isolating pump pending bearing swap per SOP-12.",
-  },
-  {
-    label: "overheat incident",
-    title: "M-15 Overheat",
-    criticality: "high",
-    asset_id: "M-15",
-    text: "Motor M-15 winding temperature reached 95C, cooling fan tripped. Cleaned filter, verified airflow. Monitoring for recurrence.",
-  },
-  {
-    label: "manual excerpt",
-    title: "Seal Replacement Procedure",
-    criticality: "high",
-    asset_id: "P-300",
-    text: "Mechanical seal replacement for P-300 high-pressure pumps. Vent system, remove seal housing, inspect shaft sleeve for wear, install new cartridge seal, align to within 0.05mm TIR, flush and pressure-test before restart.",
-  },
-  {
-    label: "sensor reading",
-    title: "TT-09 Temp Drift",
-    criticality: "medium",
-    asset_id: "TT-09",
-    text: "Temperature sensor TT-09 drift detected — reading 2.3C high vs reference at 50C point. Recalibrated against NIST-traceable reference, offset corrected.",
-  },
+  { label: "Vibration incident", title: "P-201 Vibration Spike", criticality: "critical", asset_id: "P-201", text: "P-201 drive-end vibration spiked to 9.2mm/s, BPFO peak at 142Hz — confirmed outer race bearing defect. Isolating pump pending bearing swap per SOP-12." },
+  { label: "Overheat incident", title: "M-15 Overheat", criticality: "high", asset_id: "M-15", text: "Motor M-15 winding temperature reached 95C, cooling fan tripped. Cleaned filter, verified airflow. Monitoring for recurrence." },
+  { label: "Manual excerpt", title: "Seal Replacement Procedure", criticality: "high", asset_id: "P-300", text: "Mechanical seal replacement for P-300 high-pressure pumps. Vent system, remove seal housing, inspect shaft sleeve for wear, install new cartridge seal, align to within 0.05mm TIR, flush and pressure-test before restart." },
+  { label: "Sensor reading", title: "TT-09 Temp Drift", criticality: "medium", asset_id: "TT-09", text: "Temperature sensor TT-09 drift detected — reading 2.3C high vs reference at 50C point. Recalibrated against NIST-traceable reference, offset corrected." },
 ] as const;
 
 export default function MemoryExplorer({ edge }: { edge: EdgeHook }) {
-  const memory = edge.memory;
-  const shards = memory?.shards ?? {};
+  const shards = edge.memory?.shards ?? {};
   const shardKeys = SHARD_ORDER.filter((k) => shards[k]) as string[];
-  const [selected, setSelected] = useState<string>("manuals");
-  // derive the effective shard during render so an invalid selection never
-  // cascades into a setState-within-effect.
-  const selectedShard = shardKeys.includes(selected)
-    ? selected
-    : (shardKeys[0] ?? "manuals");
+  const [selected, setSelected] = useState<string>("incidents");
+  // derive during render so an invalid selection never cascades into setState-in-effect
+  const shard = shardKeys.includes(selected) ? selected : (shardKeys[0] ?? "incidents");
+  const def = shards[shard];
+
+  const total = edge.memory?.total_points ?? 0;
 
   return (
-    <Panel
-      title="Memory Explorer"
-      desc="Local EdgeShards on device-alpha — embedded vector memory, fully offline"
-      right={
-        <div className="flex items-center gap-2 rounded-md border border-border bg-card/50 px-2.5 py-1">
-          <CircuitBoard className="h-3.5 w-3.5 text-emerald-400" />
-          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            FastEmbed · BM25
-          </span>
-        </div>
-      }
-    >
-      {!memory ? (
-        <MemoryLoadingSkeleton />
-      ) : (
-        <div className="space-y-5">
-          {/* shard cards */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            {shardKeys.map((key) => (
-              <ShardCard
-                key={key}
-                shard={shards[key]}
-                active={selectedShard === key}
-                onClick={() => setSelected(key)}
-              />
+    <div className="space-y-6">
+      <PageHero
+        title={edge.memory ? <><Hl>{total} {total === 1 ? "note" : "notes"}</Hl> on this device.</> : "Loading memory…"}
+        sub="Pick a shard to browse it, or write a note — the policy decides whether it syncs."
+        stats={
+          <div role="group" aria-label="Shard" className="grid grid-cols-3 gap-px overflow-hidden rounded-xl border border-border bg-border">
+            {shardKeys.map((k) => (
+              <button
+                key={k}
+                type="button"
+                aria-pressed={shard === k}
+                onClick={() => setSelected(k)}
+                className={cn(
+                  "relative min-w-0 px-4 py-4 text-left transition-colors sm:min-w-40 sm:px-5 sm:py-5",
+                  "after:absolute after:inset-x-0 after:top-0 after:h-0.5",
+                  shard === k ? "bg-muted after:bg-emerald-400" : "bg-background/95 hover:bg-muted/50",
+                )}
+              >
+                <span className="block font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground sm:text-[11px]">{k}</span>
+                <span className="mt-1.5 block text-3xl font-semibold tabular-nums tracking-[-0.03em] text-foreground sm:text-4xl">{shards[k].points}</span>
+                <span className="mt-1.5 hidden sm:block"><SyncStateBadge value={shards[k].default_sync} /></span>
+              </button>
             ))}
           </div>
+        }
+      />
 
-          {/* points + write form */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <div className="lg:col-span-2">
-              <PointsList key={selectedShard} edge={edge} shard={selectedShard} />
-            </div>
-            <div className="lg:col-span-1">
-              <WriteForm edge={edge} shard={selectedShard} />
-            </div>
-          </div>
+      {!edge.memory ? (
+        <div className="h-96 animate-pulse rounded-lg bg-card" />
+      ) : (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <PointsList key={shard} edge={edge} shard={shard} desc={def?.desc} className="h-full lg:col-span-2" />
+          <WriteForm edge={edge} shard={shard} />
         </div>
       )}
-    </Panel>
+    </div>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* shard card                                                                  */
-/* -------------------------------------------------------------------------- */
-
-function ShardCard({
-  shard, active, onClick,
-}: {
-  shard: MemoryShard;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        "group relative flex flex-col rounded-xl border bg-card/50 p-4 text-left transition-all duration-150 hover:bg-card/70",
-        active
-          ? "border-emerald-500/40 edge-glow-emerald"
-          : "border-border hover:border-border/80",
-      )}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background/60">
-            {SHARD_ICONS[shard.name] ?? <Database className="h-4 w-4 text-muted-foreground" />}
-          </span>
-          <span className="font-mono text-sm font-semibold tracking-tight text-foreground">
-            {shard.name}
-          </span>
-        </div>
-        <SyncStateBadge value={shard.default_sync} />
-      </div>
-
-      <p className="mt-2 line-clamp-1 min-h-[16px] text-xs text-muted-foreground">{shard.desc}</p>
-
-      <div className="mt-3 flex items-end justify-between">
-        <div>
-          <div className="text-2xl font-semibold tabular-nums text-foreground">
-            {shard.points.toLocaleString()}
-          </div>
-          <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-            points
-          </div>
-        </div>
-        <div className="flex flex-col items-end gap-1 text-right">
-          <div className="flex items-center gap-1 font-mono text-[10px] text-muted-foreground">
-            <HardDrive className="h-3 w-3" />
-            {formatBytes(shard.disk_bytes)}
-          </div>
-          <div className="font-mono text-[10px] text-muted-foreground">
-            {shard.segments} seg
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-3 border-t border-border/60 pt-2.5">
-        <div className="flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
-          <Zap className="h-3 w-3 text-emerald-400/70" />
-          <span className="truncate">{shard.embedding}</span>
-        </div>
-        <div className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
-          <Hash className="h-3 w-3" />
-          <span className="truncate">{shard.manifest_hash.slice(0, 16)}</span>
-        </div>
-      </div>
-
-      {active && (
-        <span className="absolute right-3 top-3 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500/20">
-          <CheckCircle2 className="h-3 w-3 text-emerald-300" />
-        </span>
-      )}
-    </button>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* points list (fetches via edge API client directly)                          */
-/* -------------------------------------------------------------------------- */
-
-function PointsList({ edge, shard }: { edge: EdgeHook; shard: string }) {
+function PointsList({ edge, shard, desc, className }: { edge: EdgeHook; shard: string; desc?: string; className?: string }) {
   const [points, setPoints] = useState<EdgePoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
-  const [critFilter, setCritFilter] = useState<string | null>(null);
+  const [crit, setCrit] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    edgeApi
-      .points(shard, undefined, 50)
-      .then((r) => {
-        if (cancelled) return;
-        setPoints(r.points);
-        setError(null);
-        setLoading(false);
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : String(e));
-        setPoints([]);
-        setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // re-fetch when shard changes or the memory snapshot refreshes (point counts
-    // move after a write/sync). the `loading=true` transition on shard change is
-    // handled by remount via the parent's `key` prop, so this effect only sets
-    // state inside async callbacks (no synchronous setState in the effect body).
+    edgeApi.points(shard, undefined, 50)
+      .then((r) => { if (!cancelled) { setPoints(r.points); setError(null); setLoading(false); } })
+      .catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : String(e)); setPoints([]); setLoading(false); } });
+    return () => { cancelled = true; };
+    // re-fetch when the memory snapshot refreshes (counts move after a write/sync);
+    // a shard change remounts via the parent's `key`
   }, [shard, edge.memory]);
 
-  // derive stats + filtered list directly from points (no effect needed)
-  const stats = deriveStats(points);
-  const filtered = points.filter((p) => {
-    if (critFilter && p.criticality !== critFilter) return false;
-    if (filter.trim()) {
-      const q = filter.trim().toLowerCase();
-      const hay = `${p.slug ?? ""} ${p.title ?? ""} ${p.text ?? ""} ${p.asset_id ?? ""} ${p.origin_device ?? ""}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
-
-  const critChips = ["critical", "high", "medium", "low"] as const;
+  const byCrit: Record<string, number> = {};
+  for (const p of points) byCrit[p.criticality ?? "medium"] = (byCrit[p.criticality ?? "medium"] ?? 0) + 1;
+  const q = filter.trim().toLowerCase();
+  const visible = points.filter((p) =>
+    (!crit || p.criticality === crit) &&
+    (!q || `${p.slug ?? ""} ${p.title ?? ""} ${p.text ?? ""} ${p.asset_id ?? ""} ${p.origin_device ?? ""}`.toLowerCase().includes(q)));
 
   return (
-    <div className="rounded-xl border border-border bg-card/40 p-4">
-      <div className="mb-3 flex items-center justify-between border-b border-border/60 pb-2.5">
-        <div className="flex items-center gap-2">
-          <Database className="h-3.5 w-3.5 text-emerald-400" />
-          <span className="font-mono text-xs font-semibold uppercase tracking-wider text-foreground">
-            points
-          </span>
-          <span className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-            {shard}
-          </span>
-        </div>
-        <span className="font-mono text-[10px] text-muted-foreground">
-          {loading ? "loading…" : `${filtered.length}/${points.length} shown`}
-        </span>
-      </div>
-
-      {/* stats summary bar */}
+    <Panel
+      title={<>Notes <span className="font-normal text-muted-foreground">in {shard}</span></>}
+      desc={desc}
+      className={className}
+      flush
+      fill
+      right={!loading && <span className="font-mono text-xs text-muted-foreground">{visible.length === points.length ? points.length : `${visible.length} of ${points.length}`}</span>}
+    >
       {!loading && points.length > 0 && (
-        <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <StatMini label="total" value={stats.total} accent="text-foreground" />
-          <StatMini label="critical" value={stats.critical} accent={stats.critical > 0 ? "text-rose-400" : "text-muted-foreground"} />
-          <StatMini label="local-only" value={stats.localOnly} accent={stats.localOnly > 0 ? "text-amber-400" : "text-muted-foreground"} />
-          <StatMini label="origins" value={stats.origins} accent="text-sky-300" />
-        </div>
-      )}
-
-      {/* search + filter row */}
-      {!loading && points.length > 0 && (
-        <div className="mb-3 space-y-2">
-          <div className="relative">
-            <SearchIcon className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+        <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3 sm:px-5">
+          <div className="relative min-w-48 flex-1">
+            <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <input
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               placeholder="filter by slug, text, asset, origin…"
-              className="h-8 w-full rounded-md border border-border bg-background/50 pl-8 pr-7 font-mono text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-emerald-500/40 focus:outline-none"
+              aria-label="Filter points"
+              className="h-8 w-full rounded-md border border-border bg-background pr-7 pl-8 text-sm text-foreground placeholder:text-muted-foreground"
             />
             {filter && (
-              <button onClick={() => setFilter("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                <X className="h-3 w-3" />
+              <button type="button" onClick={() => setFilter("")} aria-label="Clear filter" className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                <X className="h-3.5 w-3.5" />
               </button>
             )}
           </div>
-          <div className="flex items-center gap-1.5">
-            <Filter className="h-3 w-3 shrink-0 text-muted-foreground" />
-            {critChips.map((c) => {
-              const count = stats.byCrit[c] ?? 0;
-              if (count === 0 && critFilter !== c) return null;
-              const isActive = critFilter === c;
-              return (
-                <button
-                  key={c}
-                  onClick={() => setCritFilter(isActive ? null : c)}
-                  className={cn(
-                    "flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider transition-colors",
-                    isActive
-                      ? c === "critical" ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
-                        : c === "high" ? "border-amber-500/40 bg-amber-500/15 text-amber-300"
-                        : c === "medium" ? "border-sky-500/40 bg-sky-500/15 text-sky-300"
-                        : "border-zinc-500/40 bg-zinc-500/15 text-zinc-300"
-                      : "border-border bg-card/40 text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  {c} <span className="tabular-nums">{count}</span>
-                </button>
-              );
-            })}
-            {critFilter && (
-              <button onClick={() => setCritFilter(null)} className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground">clear</button>
-            )}
-          </div>
+          {CRITS.filter((c) => byCrit[c] || crit === c).map((c) => (
+            <button
+              key={c}
+              type="button"
+              aria-pressed={crit === c}
+              onClick={() => setCrit(crit === c ? null : c)}
+              className={cn(
+                "flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors",
+                crit === c ? "border-foreground/30 bg-muted text-foreground" : "border-border text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {c} <span className="font-mono tabular-nums">{byCrit[c] ?? 0}</span>
+            </button>
+          ))}
         </div>
       )}
 
       {loading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-16 w-full" />
-          ))}
-        </div>
+        <div className="space-y-px p-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 animate-pulse rounded bg-muted/40" />)}</div>
       ) : error ? (
-        <div className="rounded-md border border-rose-500/30 bg-rose-500/5 p-3 text-xs text-rose-300">
-          {error}
-        </div>
+        <p role="alert" className="px-4 py-6 sm:px-5 text-sm text-rose-300">{error}</p>
       ) : points.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-1.5 py-10 text-center">
-          <Database className="h-5 w-5 text-muted-foreground/50" />
-          <p className="text-xs text-muted-foreground">
-            No points on this shard yet.
-          </p>
-          <p className="font-mono text-[10px] text-muted-foreground/70">
-            bootstrap from cloud, or write one →
-          </p>
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-1.5 py-8 text-center">
-          <SearchIcon className="h-4 w-4 text-muted-foreground/50" />
-          <p className="text-xs text-muted-foreground">No points match the filter.</p>
-        </div>
+        <p className="px-4 py-12 sm:px-5 text-center text-sm text-muted-foreground">No points on this shard yet. Bootstrap from the cloud, or write the first one.</p>
+      ) : visible.length === 0 ? (
+        <p className="px-4 py-12 sm:px-5 text-center text-sm text-muted-foreground">Nothing matches that filter.</p>
       ) : (
-        <ul className="max-h-[520px] space-y-2 overflow-y-auto edge-scroll pr-1">
-          {filtered.map((p) => (
-            <li
-              key={p.id}
-              onClick={() => edge.openPoint({ ...p, shard })}
-              className="group cursor-pointer rounded-lg border border-border/60 bg-background/40 p-3 transition-colors hover:border-emerald-500/30 hover:bg-background/60"
-            >
-              <div className="flex items-start justify-between gap-3">
+        <FillScroll>
+        <ul className="divide-y divide-border">
+          {visible.map((p) => (
+            <li key={p.id}>
+              <button
+                type="button"
+                onClick={() => edge.openPoint({ ...p, shard })}
+                className="flex w-full items-start gap-4 px-4 py-3 sm:px-5 text-left transition-colors hover:bg-muted/30"
+              >
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    {p.slug && (
-                      <span className="truncate font-mono text-xs font-bold text-foreground">
-                        {p.slug}
-                      </span>
-                    )}
-                    {p.title && (
-                      <span className="truncate text-xs text-muted-foreground">
-                        {p.title}
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                    {p.text}
+                  <p className="truncate text-sm font-medium text-foreground">{p.title || p.slug || p.id.slice(0, 8)}</p>
+                  <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{p.text}</p>
+                  <p className="mt-1.5 truncate font-mono text-xs text-muted-foreground/80">
+                    {[p.slug, p.asset_id, p.origin_device && `@${p.origin_device}`, formatRelative(p.updated_at)].filter(Boolean).join(" · ")}
                   </p>
-                  <div className="mt-1.5 flex items-center gap-2 font-mono text-[10px] text-muted-foreground/80">
-                    {p.origin_device && (
-                      <span className="rounded bg-muted/60 px-1.5 py-0.5">
-                        origin: {p.origin_device}
-                      </span>
-                    )}
-                    <span>· {formatRelative(p.updated_at)}</span>
-                    {p.asset_id && (
-                      <span className="rounded bg-muted/60 px-1.5 py-0.5">
-                        asset: {p.asset_id}
-                      </span>
-                    )}
-                  </div>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <CriticalityBadge value={p.criticality} />
                   <SyncStateBadge value={p.sync_state} />
                 </div>
-              </div>
+              </button>
             </li>
           ))}
         </ul>
+        </FillScroll>
       )}
-    </div>
+    </Panel>
   );
 }
-
-function deriveStats(points: EdgePoint[]) {
-  const byCrit: Record<string, number> = {};
-  const origins = new Set<string>();
-  let localOnly = 0;
-  for (const p of points) {
-    const c = p.criticality ?? "medium";
-    byCrit[c] = (byCrit[c] ?? 0) + 1;
-    if (p.origin_device) origins.add(p.origin_device);
-    if (p.sync_state === "local_only") localOnly++;
-  }
-  return {
-    total: points.length,
-    critical: byCrit.critical ?? 0,
-    localOnly,
-    origins: origins.size,
-    byCrit,
-  };
-}
-
-function StatMini({ label, value, accent }: { label: string; value: React.ReactNode; accent?: string }) {
-  return (
-    <div className="rounded-md border border-border bg-background/30 px-2 py-1.5">
-      <div className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className={cn("font-mono text-sm font-semibold tabular-nums", accent ?? "text-foreground")}>{value}</div>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* write form                                                                  */
-/* -------------------------------------------------------------------------- */
 
 function WriteForm({ edge, shard }: { edge: EdgeHook; shard: string }) {
   const [text, setText] = useState("");
@@ -440,22 +192,11 @@ function WriteForm({ edge, shard }: { edge: EdgeHook; shard: string }) {
   const [autoTagging, setAutoTagging] = useState(false);
   const [autoTagReason, setAutoTagReason] = useState<string | null>(null);
   const online = edge.syncStatus?.online ?? true;
-
   const canWrite = text.trim().length > 0 && !writing;
+  const tagBlocked = sensitivity === "restricted" ? "Restricted notes never leave the device" : !online ? "Auto-tag needs the link" : null;
 
   const handleAutoTag = useCallback(async () => {
-    if (!text.trim()) {
-      toast({ title: "Enter text first", description: "Type the note text before auto-tagging.", variant: "destructive" });
-      return;
-    }
-    if (sensitivity === "restricted") {
-      toast({ title: "Auto-tag skipped", description: "Restricted notes never leave the device.", variant: "destructive" });
-      return;
-    }
-    if (!online) {
-      toast({ title: "Offline", description: "Cloud LLM auto-tag requires connectivity.", variant: "destructive" });
-      return;
-    }
+    if (!text.trim() || tagBlocked) return;
     setAutoTagging(true);
     setAutoTagReason(null);
     try {
@@ -470,247 +211,127 @@ function WriteForm({ edge, shard }: { edge: EdgeHook; shard: string }) {
       // never lower a user-selected restricted (they may have switched while the call was in flight)
       setSensitivity((prev) => (prev === "restricted" ? prev : data.sensitivity));
       setAutoTagReason(data.reason);
-      toast({ title: "Auto-tagged by cloud LLM", description: `${data.criticality} · ${data.sensitivity} — ${data.reason}` });
     } catch (e) {
       toast({ title: "Auto-tag failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
     } finally {
       setAutoTagging(false);
     }
-  }, [text, online, sensitivity]);
+  }, [text, tagBlocked]);
 
-  const handleWrite = useCallback(async () => {
+  const handleWrite = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!canWrite) return;
     setWriting(true);
     setDecision(null);
     try {
-      // call the edge API directly so we can surface the live policy decision
-      // (the hook's write() returns void); then refresh the hook snapshot.
+      // call the API directly to surface the live policy decision, then refresh the hook snapshot
       const result = await edgeApi.write({
-        shard,
-        text: text.trim(),
-        criticality,
-        sensitivity,
+        shard, text: text.trim(), criticality, sensitivity,
         asset_id: assetId.trim() || undefined,
         title: title.trim() || undefined,
       });
       setDecision(result);
-      toast({
-        title: "Point written",
-        description: `tagged → ${result.sync_state.toUpperCase()} · ${result.decision.reason}`,
-      });
-      setText("");
-      setTitle("");
-      setAssetId("");
+      setText(""); setTitle(""); setAssetId(""); setAutoTagReason(null);
       await edge.refresh();
-    } catch (e) {
-      toast({
-        title: "Write failed",
-        description: e instanceof Error ? e.message : String(e),
-      });
+    } catch (err) {
+      toast({ title: "Write failed", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
     } finally {
       setWriting(false);
     }
   }, [canWrite, shard, text, criticality, sensitivity, assetId, title, edge]);
 
   return (
-    <div className="rounded-xl border border-border bg-card/40 p-4">
-      <div className="mb-3 flex items-center justify-between border-b border-border/60 pb-2.5">
-        <div className="flex items-center gap-2">
-          <PenSquare className="h-3.5 w-3.5 text-emerald-400" />
-          <span className="font-mono text-xs font-semibold uppercase tracking-wider text-foreground">
-            write to shard
-          </span>
-          <span className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-            {shard}
-          </span>
-        </div>
-        <button
-          onClick={handleAutoTag}
-          disabled={!online || autoTagging || !text.trim() || sensitivity === "restricted"}
-          title={sensitivity === "restricted" ? "Restricted notes never leave the device — cloud LLM auto-tag is disabled" : online ? "Classify criticality & sensitivity via the cloud LLM" : "Cloud LLM requires connectivity"}
-          className={cn(
-            "flex items-center gap-1 rounded border px-2 py-1 font-mono text-[9px] uppercase tracking-wider transition-colors disabled:opacity-40",
-            online ? "border-sky-500/30 bg-sky-500/5 text-sky-300 hover:bg-sky-500/10" : "border-border text-muted-foreground"
-          )}
-        >
-          {autoTagging ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Cloud className="h-2.5 w-2.5" />}
-          auto-tag
-        </button>
-      </div>
-
-      <div className="space-y-3">
+    <Panel title={<>New note <span className="font-normal text-muted-foreground">in {shard}</span></>}>
+      <form onSubmit={handleWrite} className="space-y-4">
         <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              text <span className="text-rose-400">*</span>
-            </Label>
-            <span className={cn(
-              "font-mono text-[9px] tabular-nums",
-              text.length === 0 ? "text-muted-foreground/50" : text.length < 20 ? "text-amber-400" : text.length > 500 ? "text-amber-400" : "text-muted-foreground"
-            )}>
-              {text.length} chars{text.length < 20 && text.length > 0 && " · min 20"}
-            </span>
-          </div>
+          <Label htmlFor="note-text">Note</Label>
           <Textarea
+            id="note-text"
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="Paste a manual excerpt, incident note, or sensor observation…"
-            className="min-h-[100px] resize-y font-mono text-xs leading-relaxed"
+            className="min-h-[120px] resize-y text-sm leading-relaxed"
           />
-          {/* quick-insert templates */}
-          <div className="flex flex-wrap gap-1.5">
-            <span className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground/60">templates:</span>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span>Example:</span>
             {TEMPLATES.map((t) => (
               <button
                 key={t.label}
-                onClick={() => { setText(t.text); setTitle(t.title); setCriticality(t.criticality); setAssetId(t.asset_id ?? ""); }}
-                className="rounded-full border border-border bg-card/40 px-2 py-0.5 font-mono text-[9px] text-muted-foreground transition-colors hover:border-emerald-500/30 hover:text-emerald-300"
-                title={t.title}
-              >{t.label}</button>
+                type="button"
+                onClick={() => { setText(t.text); setTitle(t.title); setCriticality(t.criticality); setAssetId(t.asset_id); }}
+                className="underline-offset-2 hover:text-foreground hover:underline"
+              >{t.label.toLowerCase()}</button>
             ))}
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2.5">
+        <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              criticality
-            </Label>
+            <Label>Criticality</Label>
             <Select value={criticality} onValueChange={setCriticality}>
-              <SelectTrigger className="h-8 w-full font-mono text-xs">
-                <SelectValue />
-              </SelectTrigger>
+              <SelectTrigger className="h-9 w-full" aria-label="Criticality"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="low">low</SelectItem>
-                <SelectItem value="medium">medium</SelectItem>
-                <SelectItem value="high">high</SelectItem>
-                <SelectItem value="critical">critical</SelectItem>
+                {["low", "medium", "high", "critical"].map((v) => <SelectItem key={v} value={v}>{v}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              sensitivity
-            </Label>
+            <Label>Sensitivity</Label>
             <Select value={sensitivity} onValueChange={setSensitivity}>
-              <SelectTrigger className="h-8 w-full font-mono text-xs">
-                <SelectValue />
-              </SelectTrigger>
+              <SelectTrigger className="h-9 w-full" aria-label="Sensitivity"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="internal">internal</SelectItem>
-                <SelectItem value="restricted">restricted</SelectItem>
-                <SelectItem value="public">public</SelectItem>
+                {["internal", "restricted", "public"].map((v) => <SelectItem key={v} value={v}>{v}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
         </div>
 
-        {autoTagReason && (
-          <div className="flex items-center gap-1.5 rounded-md border border-sky-500/25 bg-sky-500/5 px-2.5 py-1.5">
-            <Sparkles className="h-3 w-3 shrink-0 text-sky-300" />
-            <span className="font-mono text-[10px] text-sky-300">cloud LLM:</span>
-            <span className="text-[11px] text-muted-foreground">{autoTagReason}</span>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleAutoTag}
+            disabled={autoTagging || !text.trim() || !!tagBlocked}
+            title={tagBlocked ?? "Let the cloud LLM set criticality and sensitivity"}
+            className="gap-1.5"
+          >
+            {autoTagging && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Auto-tag
+          </Button>
+          {autoTagReason && <p className="min-w-0 text-xs text-muted-foreground">{autoTagReason}</p>}
+        </div>
 
-        <div className="grid grid-cols-1 gap-2.5">
+        <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              title <span className="text-muted-foreground/60">(optional)</span>
-            </Label>
-            <Input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Short headline"
-              className="h-8 font-mono text-xs"
-            />
+            <Label htmlFor="note-title">Title</Label>
+            <Input id="note-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Optional" className="h-9" />
           </div>
           <div className="space-y-1.5">
-            <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              asset_id <span className="text-muted-foreground/60">(optional)</span>
-            </Label>
-            <Input
-              value={assetId}
-              onChange={(e) => setAssetId(e.target.value)}
-              placeholder="e.g. pump-7, scada-3"
-              className="h-8 font-mono text-xs"
-            />
+            <Label htmlFor="note-asset">Asset</Label>
+            <Input id="note-asset" value={assetId} onChange={(e) => setAssetId(e.target.value)} placeholder="e.g. P-201" className="h-9 font-mono" />
           </div>
         </div>
 
-        {/* offline capability note */}
-        <div className="flex items-start gap-2 rounded-md border border-emerald-500/20 bg-emerald-500/5 p-2.5">
-          <Zap className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" />
-          <p className="text-[10px] leading-relaxed text-emerald-200/80">
-            writes embed locally via FastEmbed + BM25 —{" "}
-            <span className="font-mono">zero network</span>. policy tags the point
-            in-process; sync happens later if routed.
-          </p>
-        </div>
-
-        <Button
-          onClick={handleWrite}
-          disabled={!canWrite}
-          className={cn(
-            "w-full gap-2 font-mono text-xs text-emerald-950 transition-all",
-            canWrite && !writing
-              ? "bg-emerald-500/90 hover:bg-emerald-400 edge-glow-emerald"
-              : "bg-muted text-muted-foreground"
-          )}
-        >
-          {writing ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <PenSquare className="h-3.5 w-3.5" />
-          )}
-          {writing ? "embedding…" : "write point"}
+        <Button type="submit" disabled={!canWrite} className="w-full gap-2 bg-emerald-500 text-emerald-950 shadow-[inset_0_1px_0_rgb(255_255_255/0.25)] hover:bg-emerald-400">
+          {writing && <Loader2 className="h-4 w-4 animate-spin" />}
+          {writing ? "Embedding…" : "Save note"}
         </Button>
 
         {decision && (
-          <div className="animate-in fade-in slide-in-from-bottom-1 rounded-lg border border-border bg-muted/30 p-3">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                tagged →
-              </span>
+          <div role="status" className="space-y-1.5 border-t border-border pt-4 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-mono text-xs text-foreground">{decision.slug}</span>
+              <span className="text-muted-foreground">saved →</span>
               <SyncStateBadge value={decision.sync_state} />
             </div>
-            <p className="mt-1.5 text-xs text-muted-foreground">
+            <p className="text-muted-foreground">
               {decision.decision.reason}
+              {decision.decision.matched_rule && <span className="font-mono text-xs"> ({decision.decision.matched_rule})</span>}
             </p>
-            <div className="mt-1.5 flex flex-wrap items-center gap-2 font-mono text-[10px] text-muted-foreground">
-              <span className="rounded bg-muted/60 px-1.5 py-0.5">
-                slug: {decision.slug}
-              </span>
-              {decision.decision.matched_rule && (
-                <span className="rounded bg-muted/60 px-1.5 py-0.5">
-                  rule: {decision.decision.matched_rule}
-                </span>
-              )}
-            </div>
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* loading skeleton                                                            */
-/* -------------------------------------------------------------------------- */
-
-function MemoryLoadingSkeleton() {
-  return (
-    <div className="space-y-5">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        {Array.from({ length: 3 }).map((_, i) => (
-          <Skeleton key={i} className="h-40 w-full" />
-        ))}
-      </div>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Skeleton className="h-96 lg:col-span-2" />
-        <Skeleton className="h-96 lg:col-span-1" />
-      </div>
-    </div>
+      </form>
+    </Panel>
   );
 }

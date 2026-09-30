@@ -43,51 +43,57 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* === Industrial Edge Ops dark theme (forced dark) ============================
-   Palette: near-black slate base, emerald = operational/online, amber = offline/
-   queued/warning, rose = critical/conflict. No indigo/blue per design rules. */
+/* === Obsidian & Emerald (forced dark) =======================================
+   Near-black zinc surfaces in three steps (page, panel, raised) with crisp hairline
+   borders; Tailwind's own emerald/amber/rose carry status at full strength:
+   emerald = ok/online, amber = offline/queued, rose = critical/conflict.
+   Indigo/violet are ambient light only, never status, controls or text. Light is
+   environmental: one continuous page wash from emerald-tinted (top-left) to its
+   complement, a dark plum (bottom-right), and a soft state-coloured pool behind each
+   tab's hero (PageHero). Panels are opaque. */
 :root,
 .dark {
   --radius: 0.5rem;
-  --background: oklch(0.14 0.006 160);
-  --foreground: oklch(0.96 0.005 150);
-  --card: oklch(0.185 0.008 160);
-  --card-foreground: oklch(0.96 0.005 150);
-  --popover: oklch(0.18 0.008 160);
-  --popover-foreground: oklch(0.96 0.005 150);
-  --primary: oklch(0.78 0.16 155);            /* emerald */
-  --primary-foreground: oklch(0.16 0.03 160);
-  --secondary: oklch(0.24 0.01 160);
-  --secondary-foreground: oklch(0.96 0.005 150);
-  --muted: oklch(0.23 0.008 160);
-  --muted-foreground: oklch(0.68 0.012 155);
-  --accent: oklch(0.26 0.02 160);
-  --accent-foreground: oklch(0.96 0.005 150);
-  --destructive: oklch(0.66 0.21 22);          /* rose-red */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --background: oklch(0.135 0.004 286);
+  --foreground: oklch(0.975 0.002 286);
+  --card: oklch(0.172 0.005 286);
+  --card-foreground: oklch(0.975 0.002 286);
+  --popover: oklch(0.205 0.006 286);
+  --popover-foreground: oklch(0.975 0.002 286);
+  --primary: oklch(0.765 0.177 163.2);
+  --primary-foreground: oklch(0.262 0.051 172.552);
+  --secondary: oklch(0.245 0.006 286);
+  --secondary-foreground: oklch(0.975 0.002 286);
+  --muted: oklch(0.235 0.006 286);
+  --muted-foreground: oklch(0.71 0.013 286);
+  --accent: oklch(0.255 0.007 286);
+  --accent-foreground: oklch(0.975 0.002 286);
+  --destructive: oklch(0.645 0.246 16.439);    /* rose-500 */
   --border: oklch(1 0 0 / 8%);
   --input: oklch(1 0 0 / 12%);
-  --ring: oklch(0.78 0.16 155);
-  --chart-1: oklch(0.78 0.16 155);   /* emerald */
-  --chart-2: oklch(0.82 0.15 85);    /* amber */
-  --chart-3: oklch(0.7 0.19 30);     /* rose */
-  --chart-4: oklch(0.72 0.13 200);   /* teal */
-  --chart-5: oklch(0.75 0.14 300);   /* violet (sparingly) */
-  --sidebar: oklch(0.16 0.008 160);
-  --sidebar-foreground: oklch(0.96 0.005 150);
-  --sidebar-primary: oklch(0.78 0.16 155);
-  --sidebar-primary-foreground: oklch(0.16 0.03 160);
-  --sidebar-accent: oklch(0.24 0.01 160);
-  --sidebar-accent-foreground: oklch(0.96 0.005 150);
+  --ring: oklch(0.765 0.177 163.2);
+  --chart-1: oklch(0.765 0.177 163.2);                     /* emerald */
+  --chart-2: oklch(0.855 0.138 181.071); /* teal-300 */
+  --chart-3: oklch(0.897 0.196 126.665); /* lime-300 */
+  --chart-4: oklch(0.828 0.189 84.429);  /* amber */
+  --chart-5: oklch(0.712 0.194 13.428);  /* rose */
+  --sidebar: oklch(0.165 0.005 286);
+  --sidebar-foreground: oklch(0.975 0.002 286);
+  --sidebar-primary: oklch(0.765 0.177 163.2);
+  --sidebar-primary-foreground: oklch(0.262 0.051 172.552);
+  --sidebar-accent: oklch(0.245 0.006 286);
+  --sidebar-accent-foreground: oklch(0.975 0.002 286);
   --sidebar-border: oklch(1 0 0 / 8%);
-  --sidebar-ring: oklch(0.78 0.16 155);
+  --sidebar-ring: oklch(0.765 0.177 163.2);
 
   /* edge-specific semantic tokens */
-  --edge-online: oklch(0.78 0.16 155);
-  --edge-offline: oklch(0.82 0.15 85);
-  --edge-critical: oklch(0.66 0.21 22);
-  --edge-synced: oklch(0.78 0.16 155);
-  --edge-queued: oklch(0.82 0.15 85);
-  --edge-local: oklch(0.68 0.012 155);
+  --edge-online: oklch(0.765 0.177 163.2);
+  --edge-offline: oklch(0.828 0.189 84.429);
+  --edge-critical: oklch(0.645 0.246 16.439);
+  --edge-synced: oklch(0.765 0.177 163.2);
+  --edge-queued: oklch(0.828 0.189 84.429);
+  --edge-local: oklch(0.71 0.013 286);
 }
 
 @layer base {
@@ -99,84 +105,30 @@
     min-height: 100%;
   }
   body {
-    background-color: var(--background);
-    background-image:
-      radial-gradient(circle at 1px 1px, oklch(1 0 0 / 0.035) 1px, transparent 0);
-    background-size: 22px 22px;
-    background-attachment: fixed;
+    /* one continuous wash, no pools: emerald-tinted top-left, neutral middle, its
+       complement (a dark plum) bottom-right. Chroma stays under 0.035 so it reads as tone. */
+    background: linear-gradient(
+      155deg,
+      oklch(0.185 0.032 168) 0%,
+      oklch(0.15 0.012 190) 32%,
+      oklch(0.135 0.004 286) 58%,
+      oklch(0.16 0.03 318) 100%
+    ) fixed;
+    scrollbar-color: oklch(1 0 0 / 0.18) transparent;
   }
+  ::selection {
+    background: oklch(0.765 0.177 163.2 / 0.3);
+    color: var(--foreground);
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  input, textarea { caret-color: var(--primary); }
 }
 
 /* === custom utilities ===================================================== */
 @layer utilities {
-  .edge-grid-bg {
-    background-image:
-      linear-gradient(to right, oklch(1 0 0 / 0.04) 1px, transparent 1px),
-      linear-gradient(to bottom, oklch(1 0 0 / 0.04) 1px, transparent 1px);
-    background-size: 28px 28px;
-  }
-  .edge-glow-emerald {
-    box-shadow: 0 0 0 1px oklch(0.78 0.16 155 / 0.25), 0 0 24px -6px oklch(0.78 0.16 155 / 0.45);
-  }
-  .edge-glow-amber {
-    box-shadow: 0 0 0 1px oklch(0.82 0.15 85 / 0.3), 0 0 24px -6px oklch(0.82 0.15 85 / 0.45);
-  }
-  .edge-glow-rose {
-    box-shadow: 0 0 0 1px oklch(0.66 0.21 22 / 0.35), 0 0 24px -6px oklch(0.66 0.21 22 / 0.5);
-  }
-  .text-mono { font-family: var(--font-geist-mono), ui-monospace, monospace; }
-  .edge-pulse {
-    animation: edge-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
-  @keyframes edge-pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.45; transform: scale(0.82); }
-  }
-  /* staggered fade-in for list items */
-  .edge-stagger > * {
-    opacity: 0;
-    animation: edge-fade-in 0.35s ease-out forwards;
-  }
-  .edge-stagger > *:nth-child(1) { animation-delay: 0.02s; }
-  .edge-stagger > *:nth-child(2) { animation-delay: 0.06s; }
-  .edge-stagger > *:nth-child(3) { animation-delay: 0.1s; }
-  .edge-stagger > *:nth-child(4) { animation-delay: 0.14s; }
-  .edge-stagger > *:nth-child(5) { animation-delay: 0.18s; }
-  .edge-stagger > *:nth-child(6) { animation-delay: 0.22s; }
-  .edge-stagger > *:nth-child(7) { animation-delay: 0.26s; }
-  .edge-stagger > *:nth-child(8) { animation-delay: 0.3s; }
-  .edge-stagger > *:nth-child(n+9) { animation-delay: 0.34s; }
-  @keyframes edge-fade-in {
-    from { opacity: 0; transform: translateY(4px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  /* shimmer skeleton */
-  .edge-shimmer {
-    background: linear-gradient(90deg, oklch(0.24 0.01 160) 25%, oklch(0.3 0.01 160) 50%, oklch(0.24 0.01 160) 75%);
-    background-size: 200% 100%;
-    animation: edge-shimmer 1.5s infinite;
-  }
-  @keyframes edge-shimmer {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-  }
-  /* number tick animation for metrics */
-  .edge-tick {
-    animation: edge-tick 0.4s ease-out;
-  }
-  @keyframes edge-tick {
-    0% { transform: translateY(6px); opacity: 0; }
-    100% { transform: translateY(0); opacity: 1; }
-  }
-  .edge-scan {
-    background: linear-gradient(180deg, transparent 0%, oklch(0.78 0.16 155 / 0.06) 50%, transparent 100%);
-    background-size: 100% 6px;
-    animation: edge-scan 3s linear infinite;
-  }
-  @keyframes edge-scan {
-    0% { background-position: 0 -100%; }
-    100% { background-position: 0 100%; }
-  }
   /* custom scrollbar for long lists */
   .edge-scroll {
     scrollbar-width: thin;
@@ -189,4 +141,13 @@
     border-radius: 4px;
   }
   .edge-scroll::-webkit-scrollbar-thumb:hover { background: oklch(1 0 0 / 0.26); }
+}
+
+/* === motion ================================================================ */
+@keyframes edge-rise {
+  from { opacity: 0; transform: translateY(6px); }
+}
+.edge-rise { animation: edge-rise 280ms var(--ease-out) both; }
+@media (prefers-reduced-motion: reduce) {
+  .edge-rise { animation: none; }
 }

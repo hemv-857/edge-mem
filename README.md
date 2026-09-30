@@ -25,8 +25,8 @@ The edge keeps working with no network; the cloud only adds synthesis
   (`edge-mem-snapshot` v1) that preserves point ids, `origin_device` and
   timestamps, so re-importing your own snapshot raises zero conflicts.
 - **Cloud browser** — browse, search and delete Qdrant Server collections from
-  the Cloud tab.
-- **Live metrics** — SSE stream of fleet metrics into the Metrics tab.
+  the Fleet tab.
+- **Live metrics** — SSE stream of fleet metrics into the Activity tab.
 - **TTL retention** — raw sensor telemetry is swept against
   `policy.ttl_raw_sensor_seconds` by a background ticker on the engine's main
   thread.
@@ -176,6 +176,6 @@ worklog.md                    per-task development log
   online needs that directory copied onto it (or a baked image) — after that it
   starts and searches with no network.
 - The console keeps working when the cloud is down: cloud counts show the last
-  known values and the Cloud tab reports 503; sync/bootstrap/resolve fail
+  known values and the Fleet tab reports the cloud unreachable; sync/bootstrap/resolve fail
   cleanly with the queue intact and the console tells you so.
 - See `worklog.md` for the reasoning behind each stage.

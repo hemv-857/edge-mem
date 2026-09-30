@@ -24,16 +24,17 @@ leave the device.
 - Running the engine on untrusted networks without `EDGE_TOKEN` + a firewall.
 
 ## Features (shipped)
-| Tab | What |
-| --- | --- |
-| Overview | Fleet health, fleet-learning hero, demo walkthrough |
-| Memory | Shards, recent points, write form with live policy decision |
-| Search | dense / sparse / hybrid, filters, score breakdown, mode compare |
-| Sync | Online/offline toggle, queue, bootstrap, conflicts (local / remote / 3-way merge) |
-| Metrics | Live SSE fleet metrics, export |
-| Activity | Append-only log, search, export |
-| Cloud | Browse / search / delete Qdrant Server collections |
-| Policy | Rule table, TTL, simulate with decision trace |
+| Tab | Question it answers | What |
+| --- | --- | --- |
+| Home | What needs me on this device now? | Attention line (conflicts, offline, queue), "seen this before?" search, recent incidents, device facts |
+| Search | Have we seen this before? | dense / sparse / hybrid, filters, score breakdown, mode compare, distill → SOP |
+| Knowledge | What's stored here? | Shards, notes list with filter, write form with live policy decision |
+| Sync | Is my knowledge in step with the fleet? | Queue, sync / bootstrap, auto-sync, conflicts (local / remote / merge), snapshot handoff, history |
+| Fleet | Who else is out there? | Devices (incl. federated peer), cloud collections: browse / search / delete |
+| Policy | What leaves the device? | Rule table, simulate with decision trace, raw-sensor TTL retention |
+| Activity | What happened? | Live SSE metrics, search latency, append-only event log with export |
+
+The demo walkthrough lives in a side sheet (top bar "Guide" or ⌘K), not on Home.
 
 ## Security requirements
 | # | Requirement | Status |
@@ -52,7 +53,7 @@ leave the device.
 ## Resilience requirements
 | # | Requirement | Status |
 | --- | --- | --- |
-| R1 | A cloud outage never breaks local search/write or the console (last-known cloud counts, `reachable:false`, 503 on Cloud tab) | Done — circuit breaker, `test_sync_integrity.py` |
+| R1 | A cloud outage never breaks local search/write or the console (last-known cloud counts, `reachable:false`, cloud shown unreachable on Fleet tab) | Done — circuit breaker, `test_sync_integrity.py` |
 | R2 | Queue, conflicts and policy survive a crash or power cut (atomic writes) | Done |
 | R3 | A shard that fails to load is quarantined (`<shard>.corrupt-<ts>`), never deleted | Done |
 | R4 | Admin policy survives an engine restart (`data/policy.json`, re-validated on load) | Done |

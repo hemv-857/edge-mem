@@ -11,7 +11,7 @@ import { toast } from "@/hooks/use-toast";
 import { edge as edgeApi } from "@/lib/edge-api";
 import type { EdgeHook } from "@/hooks/use-edge";
 import type { SearchResult } from "@/lib/edge-types";
-import { CriticalityBadge, SyncStateBadge, formatBytes, formatRelative, formatTime } from "./edge-ui";
+import { CriticalityBadge, SyncStateBadge, Tag as Pill, formatBytes, formatRelative, formatTime } from "./edge-ui";
 
 export interface PointRef {
   id: string;
@@ -160,26 +160,26 @@ export default function PointDetailDrawer({
     <>
       {/* backdrop */}
       <div
-        className="fixed inset-0 z-50 bg-background/70 backdrop-blur-sm animate-in fade-in"
+        className="fixed inset-0 z-50 bg-black/60 animate-in fade-in"
         onClick={onClose}
       />
       {/* drawer */}
-      <aside className="fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col border-l border-border bg-card/95 shadow-2xl animate-in slide-in-from-right">
+      <aside className="fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col border-l border-border bg-card shadow-[-16px_0_48px_-16px_rgb(0_0_0/0.6)] animate-in slide-in-from-right duration-200">
         {/* header */}
-        <div className="flex items-start justify-between gap-3 border-b border-border/60 p-4">
+        <div className="flex items-start justify-between gap-3 border-b border-border/60 p-5">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground">{DOMAIN_ICON[p.domain ?? ""] ?? <FileText className="h-3 w-3" />}</span>
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{point.shard}</span>
-              {p.domain && <span className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{p.domain}</span>}
+              <span className="text-xs text-muted-foreground">{point.shard}</span>
+              {p.domain && <span className="text-xs text-muted-foreground">· {p.domain}</span>}
             </div>
-            <h2 className="mt-1 truncate font-mono text-sm font-semibold text-foreground">{p.slug ?? point.id.slice(0, 12)}</h2>
-            {p.title && <p className="truncate text-xs text-muted-foreground">{p.title}</p>}
+            <h2 className="mt-1.5 text-xl leading-tight font-semibold tracking-tight text-balance text-foreground">{p.title || p.slug || point.id.slice(0, 12)}</h2>
+            {p.title && p.slug && <p className="mt-1 truncate font-mono text-xs text-muted-foreground">{p.slug}</p>}
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
             <button
               onClick={() => navigator.clipboard?.writeText(point.id).then(() => toast({ title: "Copied", description: "point ID" }))}
-              title="Copy point ID"
+              title="Copy point ID" aria-label="Copy point ID"
               className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               <Copy className="h-3.5 w-3.5" />
@@ -187,45 +187,44 @@ export default function PointDetailDrawer({
             {p.text && (
               <button
                 onClick={() => navigator.clipboard?.writeText(p.text ?? "").then(() => toast({ title: "Copied", description: "point text" }))}
-                title="Copy text"
+                title="Copy text" aria-label="Copy text"
                 className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
                 <FileText className="h-3.5 w-3.5" />
               </button>
             )}
-            <button onClick={onClose} className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+            <button onClick={onClose} aria-label="Close" className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
               <X className="h-4 w-4" />
             </button>
           </div>
         </div>
 
         {/* body — scrollable */}
-        <div className="edge-scroll flex-1 overflow-y-auto p-4">
+        <div className="edge-scroll flex-1 overflow-y-auto p-5">
           {/* badges row */}
           <div className="flex flex-wrap items-center gap-1.5">
             <CriticalityBadge value={p.criticality} />
             <SyncStateBadge value={p.sync_state} />
-            {p.severity && <span className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">sev: {p.severity}</span>}
+            {p.severity && <Pill tone="dim">severity {p.severity}</Pill>}
           </div>
 
           {/* metadata grid */}
-          <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 rounded-lg border border-border bg-background/40 p-3 font-mono text-[11px]">
+          <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
             <Meta icon={<Hash className="h-3 w-3" />} label="id" value={<span className="break-all text-foreground/80">{point.id.slice(0, 18)}…</span>} />
-            <Meta icon={<Clock className="h-3 w-3" />} label="updated" value={formatRelative(p.updated_at)} />
+            <Meta icon={<Clock className="h-3 w-3" />} label="updated" value={<span title={p.updated_at ? new Date(p.updated_at).toLocaleString() : undefined}>{formatRelative(p.updated_at)}{p.updated_at ? ` · ${formatTime(p.updated_at)}` : ""}</span>} />
             <Meta icon={<Server className="h-3 w-3" />} label="origin" value={p.origin_device ?? "—"} accent={p.origin_device === edge.state?.active_device ? "emerald" : undefined} />
             {p.asset_id && <Meta icon={<Tag className="h-3 w-3" />} label="asset" value={p.asset_id} />}
             {p.sensor_type && <Meta icon={<Gauge className="h-3 w-3" />} label="sensor" value={p.sensor_type} />}
-            {p.value !== undefined && <Meta icon={<Gauge className="h-3 w-3" />} label="value" value={`${p.value}${p.unit ?? ""}`} />}
+            {p.value != null && <Meta icon={<Gauge className="h-3 w-3" />} label="value" value={`${p.value}${p.unit ?? ""}`} />}
             {p.sensitivity && <Meta icon={<ShieldAlert className="h-3 w-3" />} label="sensitivity" value={p.sensitivity} accent={p.sensitivity === "restricted" ? "rose" : undefined} />}
-            {p.updated_at && <Meta icon={<Clock className="h-3 w-3" />} label="time" value={formatTime(p.updated_at)} />}
           </div>
 
           {/* text content */}
           <div className="mt-3">
-            <div className="mb-1 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              <FileText className="h-3 w-3" /> Content
+            <div className="mb-1.5 text-xs text-muted-foreground">
+              Content
             </div>
-            <div className="rounded-lg border border-border bg-background/40 p-3">
+            <div className="rounded-md border border-border bg-background p-3">
               {loading ? (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Loader2 className="h-3 w-3 animate-spin" /> loading full payload…
@@ -239,13 +238,13 @@ export default function PointDetailDrawer({
           {/* cloud LLM distill (online only) */}
           {p.domain === "incident" && (
             <div className="mt-3">
-              <div className="mb-1 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                <Cloud className="h-3 w-3 text-sky-300" /> Cloud LLM
+              <div className="mb-1.5 text-xs text-muted-foreground">
+                Cloud LLM
               </div>
               {distilledSop ? (
-                <div className="rounded-lg border border-sky-500/25 bg-sky-500/5 p-3">
+                <div className="rounded-md border border-border bg-background p-3">
                   <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-foreground/90">{distilledSop}</pre>
-                  <Button size="sm" onClick={handleSaveSop} disabled={!!edge.busy} className="mt-2 gap-1 bg-emerald-500/90 font-mono text-[10px] text-emerald-950 hover:bg-emerald-400">
+                  <Button size="sm" onClick={handleSaveSop} disabled={!!edge.busy} className="mt-3 gap-1.5 bg-emerald-500 text-emerald-950 shadow-[inset_0_1px_0_rgb(255_255_255/0.25)] hover:bg-emerald-400">
                     <Save className="h-3 w-3" /> Save to manuals
                   </Button>
                 </div>
@@ -257,7 +256,7 @@ export default function PointDetailDrawer({
                     onClick={handleDistill}
                     disabled={!canDistill || distilling}
                     title={restricted ? "Restricted notes never leave the device — cloud LLM distill is disabled" : undefined}
-                    className="gap-1.5 border-sky-500/30 bg-sky-500/5 font-mono text-[11px] text-sky-300 hover:bg-sky-500/10"
+                    className="gap-1.5"
                   >
                     {distilling ? <Loader2 className="h-3 w-3 animate-spin" /> : <Cloud className="h-3 w-3" />}
                     Distill → SOP
@@ -275,16 +274,16 @@ export default function PointDetailDrawer({
           {/* similar points — semantic "related knowledge" via hybrid search */}
           <div className="mt-3">
             <div className="mb-1 flex items-center justify-between">
-              <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                <GitCompare className="h-3 w-3 text-emerald-400" /> Similar points
+              <div className="text-xs text-muted-foreground">
+                Similar points
               </div>
               {similar === null && !loadingSimilar && (
                 <button
                   onClick={handleFindSimilar}
                   disabled={!p.text}
-                  className="flex items-center gap-1 rounded border border-emerald-500/30 bg-emerald-500/5 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-emerald-300 transition-colors hover:bg-emerald-500/10 disabled:opacity-40"
+                  className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
                 >
-                  <Search className="h-2.5 w-2.5" /> find similar
+                  <Search className="h-3 w-3" /> Find similar
                 </button>
               )}
             </div>
@@ -300,7 +299,7 @@ export default function PointDetailDrawer({
             )}
             {similar && similar.map((group) => (
               <div key={group.shard} className="mb-2">
-                <div className="mb-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground/70">{group.shard}</div>
+                <div className="mb-1 text-xs text-muted-foreground">{group.shard}</div>
                 <div className="space-y-1">
                   {group.results.map((r) => (
                     <button
@@ -310,10 +309,10 @@ export default function PointDetailDrawer({
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="truncate font-mono text-[11px] font-semibold text-foreground">{r.slug ?? r.id.slice(0, 8)}</span>
-                        <span className="shrink-0 font-mono text-[9px] tabular-nums text-emerald-400">{r.score.toFixed(3)}</span>
+                        <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">{r.score.toFixed(3)}</span>
                       </div>
                       <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{r.text}</p>
-                      {r.origin_device && <span className="mt-0.5 inline-block font-mono text-[9px] text-sky-300">@{r.origin_device}</span>}
+                      {r.origin_device && <span className="mt-0.5 inline-block font-mono text-xs text-muted-foreground">@{r.origin_device}</span>}
                     </button>
                   ))}
                 </div>
@@ -322,9 +321,9 @@ export default function PointDetailDrawer({
             {similar && similar.length > 0 && (
               <button
                 onClick={handleFindSimilar}
-                className="mt-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground"
+                className="mt-1 text-xs text-muted-foreground hover:text-foreground"
               >
-                ↻ re-run search
+                Search again
               </button>
             )}
           </div>
@@ -332,8 +331,8 @@ export default function PointDetailDrawer({
           {/* extra payload keys */}
           {extraKeys.length > 0 && (
             <div className="mt-3">
-              <div className="mb-1 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                <Cpu className="h-3 w-3" /> Full payload
+              <div className="mb-1.5 text-xs text-muted-foreground">
+                Full payload
               </div>
               <div className="rounded-lg border border-border bg-background/40 p-3">
                 <dl className="space-y-1 font-mono text-[11px]">
@@ -351,7 +350,7 @@ export default function PointDetailDrawer({
 
         {/* footer actions */}
         <div className="flex items-center gap-2 border-t border-border/60 p-3">
-          <span className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
+          <span className="font-mono text-xs text-muted-foreground">
             {point.shard} · {point.id.slice(0, 8)}…
           </span>
           <div className="ml-auto flex gap-1.5">
@@ -360,7 +359,7 @@ export default function PointDetailDrawer({
               variant="outline"
               onClick={handleDelete}
               disabled={deleting || !!edge.busy}
-              className="gap-1 border-rose-500/30 bg-rose-500/5 font-mono text-[10px] text-rose-300 hover:bg-rose-500/10"
+              className="gap-1.5 border-rose-500/30 text-rose-300 hover:bg-rose-500/10"
             >
               {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
               Delete
@@ -376,10 +375,10 @@ function Meta({ icon, label, value, accent }: { icon: React.ReactNode; label: st
   const color = accent === "emerald" ? "text-emerald-400" : accent === "rose" ? "text-rose-400" : "text-foreground";
   return (
     <div className="min-w-0">
-      <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-muted-foreground">
-        {icon}{label}
+      <div className="text-xs text-muted-foreground">
+        {label}
       </div>
-      <div className={cn("truncate", color)}>{value}</div>
+      <div className={cn("truncate font-mono text-sm", color)}>{value}</div>
     </div>
   );
 }

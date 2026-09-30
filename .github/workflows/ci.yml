@@ -98,7 +98,9 @@ jobs:
         run: cp .env.example .env
 
       - name: Start Qdrant + edge-engine (device-alpha) + federated peer (device-beta)
-        run: nohup ./mini-services/edge-engine/start.sh > edge-engine.log 2>&1 &
+        # job-level $PORT would leak into main.py's bind port fallback (it's
+        # Next's port) — pin the engine's own port here
+        run: EDGE_PORT=3030 nohup ./mini-services/edge-engine/start.sh > edge-engine.log 2>&1 &
 
       - name: Start stub LLM + Next dev
         run: |

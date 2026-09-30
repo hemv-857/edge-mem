@@ -11,9 +11,13 @@ import types
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-for name in ("qdrant_client", "qdrant_client.http", "qdrant_client.http.models", "embed"):
+for name in ("qdrant_client", "qdrant_client.http", "qdrant_client.http.models",
+             "qdrant_client.http.exceptions", "embed"):
     sys.modules[name] = mock.MagicMock()
 sys.modules["embed"].DENSE_DIM, sys.modules["embed"].SPARSE_NAME = 4, "text"
+# cloud_qdrant imports this at module level; keep it a real exception class
+sys.modules["qdrant_client.http.exceptions"].UnexpectedResponse = type(
+    "UnexpectedResponse", (Exception,), {})
 import cloud_qdrant as C  # noqa: E402
 
 

@@ -21,6 +21,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 import embed
 
@@ -93,13 +94,19 @@ class QdrantCloudShard:
     def _ensure_collection(self) -> None:
         if self.client.collection_exists(self.collection):
             return
-        self.client.create_collection(
-            collection_name=self.collection,
-            vectors_config=qm.VectorParams(size=DENSE_DIM, distance=qm.Distance.COSINE),
-            sparse_vectors_config={
-                SPARSE_NAME: qm.SparseVectorParams(index=qm.SparseIndexParams(on_disk=False)),
-            },
-        )
+        try:
+            self.client.create_collection(
+                collection_name=self.collection,
+                vectors_config=qm.VectorParams(size=DENSE_DIM, distance=qm.Distance.COSINE),
+                sparse_vectors_config={
+                    SPARSE_NAME: qm.SparseVectorParams(index=qm.SparseIndexParams(on_disk=False)),
+                },
+            )
+        except UnexpectedResponse as e:
+            # Every fleet member booting against a fresh server races to create
+            # the shared collections; losing that race is success, not a crash.
+            if e.status_code != 409:
+                raise
 
     # -- writes -------------------------------------------------------------
     def upsert(self, point_id: str, dense: List[float], sparse, payload: Dict[str, Any]) -> None:

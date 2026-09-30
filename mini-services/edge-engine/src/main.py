@@ -26,7 +26,9 @@ import embed
 import engine as E
 import seed as S
 
-PORT = int(os.environ.get("EDGE_PORT", "3030"))
+# EDGE_PORT wins (local dev / the federated peer); Render sets $PORT and would
+# otherwise leave the service listening on the wrong port.
+PORT = int(os.environ.get("EDGE_PORT") or os.environ.get("PORT") or "3030")
 BIND = os.environ.get("EDGE_BIND", "0.0.0.0")   # 0.0.0.0: a peer on another host must reach us
 # Shared secret for everything except /health. Unset = open (local dev only);
 # set it on every engine + the Next.js server whenever the bind is reachable.
@@ -37,6 +39,11 @@ MAX_BODY = 8 * 1024 * 1024   # snapshots are the largest legit body
 # (Caddy forwards the browser's Host; a cross-host peer is probed by its IP).
 ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]", BIND.lower()} | {
     h.strip().lower() for h in os.environ.get("EDGE_ALLOWED_HOSTS", "").split(",") if h.strip()}
+# PaaS egress host: Render (and similar) front the service with its own
+# published hostname, which the platform sets as an env var at runtime.
+for _u in (os.environ.get("RENDER_EXTERNAL_URL"), os.environ.get("RENDER_EXTERNAL_HOSTNAME")):
+    if _u:
+        ALLOWED_HOSTS.add(urlparse(_u if "//" in _u else f"http://{_u}").hostname or "")
 _started_at = time.time()
 
 print("[edge-engine] booting — creating Fleet on main thread...", flush=True)

@@ -1,0 +1,21 @@
+# Render blueprint for the edge-engine (Python service).
+# Dashboard → New → Blueprint → pick this repo; Render reads this file.
+#
+# The Next.js frontend deploys separately on Vercel. After both are up:
+#   1. copy this service's URL into Vercel env EDGE_URL
+#   2. copy EDGE_TOKEN (generated below) into Vercel env EDGE_TOKEN
+#   3. custom domain? add it to Vercel env EDGE_ALLOWED_HOSTS (host guard)
+services:
+  - type: web
+    name: edge-mem-engine
+    runtime: python
+    plan: starter # fastembed's model load needs more RAM than free tier
+    buildCommand: pip install -r mini-services/edge-engine/requirements.txt
+    startCommand: bash mini-services/edge-engine/start.sh
+    healthCheckPath: /api/edge/health
+    healthCheckTimeout: 300 # first boot downloads the embedding model
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13"
+      - key: EDGE_TOKEN
+        generateValue: true

@@ -14,6 +14,9 @@ export const dynamic = "force-dynamic";
 // SSRF relay to every localhost service (e.g. Qdrant's unauthenticated :6333).
 const ALLOWED_PORTS = new Set((process.env.EDGE_PORTS ?? "3030,3031").split(",").map((p) => p.trim()));
 const TOKEN = process.env.EDGE_TOKEN;
+// Remote engine (Render/another host): when set, calls go there instead of a
+// loopback port. Operator-set, so not part of the SSRF surface.
+const REMOTE = (process.env.EDGE_URL ?? "").replace(/\/+$/, "");
 const MAX_BODY = 8 * 1024 * 1024; // same cap the engine enforces
 const TIMEOUT_MS = 10_000;
 
@@ -36,7 +39,7 @@ async function proxy(req: Request, method: string, path: string[]) {
   }
 
   url.searchParams.delete("XTransformPort");
-  const target = `http://127.0.0.1:${port}/api/edge/${path.join("/")}${url.search}`;
+  const target = `${REMOTE || `http://127.0.0.1:${port}`}/api/edge/${path.join("/")}${url.search}`;
   if (!new URL(target).pathname.startsWith("/api/edge/")) {
     return NextResponse.json({ error: "invalid path" }, { status: 400 });
   }

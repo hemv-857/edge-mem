@@ -9,8 +9,19 @@
 //                       comma-separated, e.g. "edge-01.plant.lan,10.0.4.21"
 import { NextResponse, type NextRequest } from "next/server";
 
+// Deployed hosts come from the platform: Vercel publishes the deployment's own
+// hostnames as env vars, so a request pinned to them is still same-origin.
+const csv = (s?: string) => (s ?? "").split(",");
 const ALLOWED_HOSTS = new Set(
-  ["localhost", "127.0.0.1", "[::1]", ...(process.env.EDGE_ALLOWED_HOSTS ?? "").split(",")]
+  [
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+    ...csv(process.env.EDGE_ALLOWED_HOSTS),
+    ...csv(process.env.VERCEL_URL),
+    ...csv(process.env.VERCEL_BRANCH_URL),
+    ...csv(process.env.VERCEL_PROJECT_PRODUCTION_URL),
+  ]
     .map((h) => h.trim().toLowerCase())
     .filter(Boolean),
 );

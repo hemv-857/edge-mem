@@ -16,6 +16,7 @@ export default function TopBar({ edge, nav, onOpenPalette, onOpenGuide }: { edge
   return (
     <div className="mx-auto flex max-w-[1760px] flex-wrap items-center gap-x-4 px-4 sm:px-6 lg:h-16 lg:flex-nowrap lg:gap-x-8 xl:px-10">
       <div className="flex h-14 min-w-0 flex-1 basis-0 items-baseline gap-3 lg:h-auto lg:flex-none lg:basis-auto">
+        <img src="/logo.svg" alt="" aria-hidden width={24} height={24} className="h-6 w-6 shrink-0 self-center" />
         <h1 className="text-[17px] font-bold tracking-tight text-foreground">EDGE.MEM</h1>
         {active && (
           <span className="truncate font-mono text-sm text-muted-foreground" title={active.location}>{active.id}</span>

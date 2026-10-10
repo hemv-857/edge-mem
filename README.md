@@ -116,10 +116,44 @@ Everything else works with no LLM and no network.
 | `FEDERATED_PEERS` | `device-beta=http://localhost:3031` | `name=url` pairs the fleet probes |
 | `QDRANT_URL` | `http://localhost:6333` | Cloud backend. Falls back to an embedded store when unreachable |
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | OpenAI | Cloud synthesis only |
-| `EDGE_TOKEN` | unset | Shared secret, sent as `X-Edge-Token`, required on every engine route except `/health`. Use the same value for both engines and the Next.js server |
+| `EDGE_TOKEN` | unset | Shared secret, sent as `X-Edge-Token`, required on every engine route except `/api/edge/health`. Use the same value for both engines and the Next.js server |
+| `EDGE_URL` | unset | Remote engine base URL the Next.js proxy targets instead of `127.0.0.1`. Server-side only — set it on Vercel for the deployed engine |
 | `EDGE_BIND` | `0.0.0.0` | Engine bind address. Use `127.0.0.1` if you don't federate across hosts |
 | `EDGE_PORTS` | `3030,3031` | Ports the Next.js proxy may forward `XTransformPort` to |
 | `EDGE_ALLOWED_HOSTS` | unset | Extra `Host` names or IPs (comma-separated, no port) the engine accepts besides `localhost`, `127.0.0.1`, `[::1]` and `EDGE_BIND` |
+
+## Deployment
+
+The live product is two services wired together:
+
+| | Service | Role |
+| --- | --- | --- |
+| UI | [edge-mem.vercel.app](https://edge-mem.vercel.app) | Next.js on Vercel |
+| Engine | `edge-mem-engine.onrender.com` | Python engine on Render, blueprint `render.yaml` |
+
+They are joined by two **server-side** Vercel environment variables, which is
+why neither appears in the served HTML:
+
+- `EDGE_URL` — the engine's base URL. When set, the gateway at
+  `src/app/api/edge/[...path]/route.ts` targets it instead of
+  `127.0.0.1`; `XTransformPort` then only has to be one of `EDGE_PORTS`, it
+  does not decide where the request goes.
+- `EDGE_TOKEN` — the same shared secret Render generated (see `render.yaml`).
+  The gateway adds `X-Edge-Token` on its server-to-server hop.
+
+Both are deliberately **not** `NEXT_PUBLIC_*`: that would ship the secret to
+the browser.
+
+What this means for a visitor:
+
+- Every call from the browser is same-origin — `https://edge-mem.vercel.app/api/edge/*`
+  and `/api/edge/stream` — so no CORS is needed anywhere in the working path.
+  The engine sends no CORS headers on purpose: a direct browser call to it
+  fails on both the missing token and the missing
+  `Access-Control-Allow-Origin`. That is the security model, not a gap.
+- The visitor needs no token; the gateway holds it.
+- Anything talking to the engine directly (curl, a peer device, a script) needs
+  `X-Edge-Token` on every route except `/api/edge/health`.
 
 ## Security
 
@@ -128,7 +162,7 @@ The engine binds `0.0.0.0` by default, reported as `bind` in
 network, set `EDGE_TOKEN`, `EDGE_BIND=127.0.0.1`, or both.
 
 The engine sends no CORS headers and only accepts `application/json` bodies. It
-returns 403 on every route except `/health` unless the `Host` header is
+returns 403 on every route except `/api/edge/health` unless the `Host` header is
 loopback, `EDGE_BIND`, or listed in `EDGE_ALLOWED_HOSTS`. Other websites
 therefore can't drive it from a browser, even through DNS rebinding. If you
 reach an engine by a LAN name or IP (for example a cross-host peer probed at

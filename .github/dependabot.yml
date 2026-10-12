@@ -1,0 +1,39 @@
+# Groups minor+patch bumps into one PR per ecosystem, and bundles action/
+# tooling bumps into another, so a weekly Dependabot run is mergeable in one action.
+version: 2
+updates:
+- package-ecosystem: npm
+  directory: /
+  schedule:
+    interval: weekly
+  open-pull-requests-limit: 5
+  groups:
+    minor-and-patch: &id001
+      patterns:
+      - '*'
+      update-types:
+      - minor
+      - patch
+    actions-and-tooling: &id002
+      patterns:
+      - actions/*
+      - docker/*
+      - codecov/*
+      - oven-sh/*
+      - github/*
+- package-ecosystem: pip
+  directory: /mini-services/edge-engine
+  schedule:
+    interval: weekly
+  open-pull-requests-limit: 5
+  groups:
+    minor-and-patch: *id001
+    actions-and-tooling: *id002
+- package-ecosystem: github-actions
+  directory: /
+  schedule:
+    interval: weekly
+  open-pull-requests-limit: 5
+  groups:
+    minor-and-patch: *id001
+    actions-and-tooling: *id002

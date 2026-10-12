@@ -243,6 +243,10 @@ worklog.md                    per-task development log
   says so.
 - `worklog.md` explains the reasoning behind each stage.
 
-## License
+## Contributing
 
-[LICENSE](https://github.com/hemv-857/edge-mem/blob/main/LICENSE) — see the file for the full text.
+Open a PR. CI runs on every push and pull request and must be green before merge ([workflow](.github/workflows/ci.yml)).
+
+Keep commits conventional — `type: description`.
+
+#

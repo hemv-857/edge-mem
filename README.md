@@ -1,5 +1,7 @@
 # EDGE.MEM
 
+<a href="https://github.com/hemv-857/edge-mem/actions/workflows/ci.yml"><img src="https://github.com/hemv-857/edge-mem/actions/workflows/ci.yml/badge.svg" alt="edge-mem CI"></a> <a href="https://github.com/hemv-857/edge-mem/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a> <img src="https://img.shields.io/badge/TypeScript-3178C6.svg" alt="TypeScript">
+
 EDGE.MEM is an offline-first knowledge engine for industrial edge devices. Each
 device keeps a local hybrid-search memory (dense vectors plus BM25 sparse) and
 syncs it to a shared Qdrant Server in the cloud. Devices run as separate
@@ -240,3 +242,7 @@ worklog.md                    per-task development log
   bootstrap and resolve fail cleanly, leave the queue intact, and the console
   says so.
 - `worklog.md` explains the reasoning behind each stage.
+
+## License
+
+[LICENSE](https://github.com/hemv-857/edge-mem/blob/main/LICENSE) — see the file for the full text.
